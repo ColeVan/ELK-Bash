@@ -1,3 +1,3 @@
 # PS-Managment
-![htb_pic](https://github.com/ColeVan/PS-Kit-Managment/assets/70167373/c46a7680-5db0-46e3-b363-074449493eca)
 
+![image](https://github.com/ColeVan/PS-Kit-Managment/assets/70167373/37a9846e-5168-4cfa-a2cf-7bad9c7f7c93)
