@@ -1,7 +1,6 @@
 # PS-Managment
 
-![image](https://github.com/ColeVan/PS-Kit-Managment/assets/70167373/37a9846e-5168-4cfa-a2cf-7bad9c7f7c93)
-
+![htb_pic](https://github.com/user-attachments/assets/d786152b-9751-499d-aaef-f9d1c4f0ba21)
 
 🚀 ELK Stack Deployment Script
 
