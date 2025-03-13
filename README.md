@@ -1,4 +1,4 @@
-# PS-Managment
+# Elastic Logstash Kibana Deployment Script
 
 ![htb_pic](https://github.com/user-attachments/assets/d786152b-9751-499d-aaef-f9d1c4f0ba21)
 
@@ -12,7 +12,7 @@ The script deploy_ELK_STACK_ALPHA_version_1.3.sh automates the deployment and co
 
 🔹 Interactive Deployment
 
-Prompts the user to choose between a single-instance or cluster deployment.
+Prompts the user to choose between a single-instance or cluster deployment. (Cluster development is still in progress, so it's best to choose single-instance for now.)
 
 Asks for IP addresses for Elasticsearch, Kibana, and Logstash.
 
