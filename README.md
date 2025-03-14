@@ -12,6 +12,17 @@ https://github.com/user-attachments/assets/da4704f8-cc7b-4702-9bec-9404fa2190c4
 
 ## 🔥 Overview  
 The script **`deploy_ELK_STACK_ALPHA_version_1.3.sh`** automates the deployment and configuration of the **Elastic Stack** (**Elasticsearch, Kibana, and Logstash**) on Linux.
+It provides options for both single-instance and cluster deployments, handling all necessary installations, configurations, and security settings. However, the cluster deployment is still in the works so only use single instace settings when prompted.
+
+## 🖥️ System Requirements
+To ensure a smooth deployment, it's recommended to use the following minimum VM specifications:
+
+## Recommended OS: 🐧 Ubuntu (Latest LTS version)
+CPU: ⚡ 4 vCPUs
+RAM: 🔥 8GB - 16GB
+Storage: 💾 100GB attached storage
+Internet Connection: 🌍 Required for installation
+Installation Time: ⏳ Less than 15 minutes on a stable connection
 
 ---
 
