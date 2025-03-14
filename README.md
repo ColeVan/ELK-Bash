@@ -18,11 +18,11 @@ It provides options for both single-instance and cluster deployments, handling a
 To ensure a smooth deployment, it's recommended to use the following minimum VM specifications:
 
 ## Recommended OS: 🐧 Ubuntu (Latest LTS version)
-CPU: ⚡ 4 vCPUs
-RAM: 🔥 8GB - 16GB
-Storage: 💾 100GB attached storage
-Internet Connection: 🌍 Required for installation
-Installation Time: ⏳ Less than 15 minutes on a stable connection
+- CPU: ⚡ 4 vCPUs
+- RAM: 🔥 8GB - 16GB
+- Storage: 💾 100GB attached storage
+- Internet Connection: 🌍 Required for installation
+- Installation Time: ⏳ Less than 15 minutes on a stable connection
 
 ---
 
