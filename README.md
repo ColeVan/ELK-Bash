@@ -8,7 +8,7 @@ https://github.com/user-attachments/assets/da4704f8-cc7b-4702-9bec-9404fa2190c4
 
 
 
-🚀 ELK Stack Deployment Script
+🚀 !!ELK Stack Deployment Script
 🔥 Overview
 The script deploy_ELK_STACK_ALPHA_version_1.3.sh automates the deployment and configuration of the Elastic Stack (Elasticsearch, Kibana, and Logstash) on a Linux system. It provides options for both single-instance and cluster deployments, handling all necessary installations, configurations, and security settings.
 
