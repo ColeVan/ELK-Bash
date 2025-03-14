@@ -74,13 +74,13 @@ To ensure a smooth deployment, it's recommended to use the following minimum VM 
 - Obtain **OAuth2 access token**.  
 - Configure **Logstash API key authentication**.
 
-## 🔹 **Fleet and Elastic Agent Integration**  
+## 6️⃣ **Fleet and Elastic Agent Integration**  
 - 🚀 **Installs and configures Fleet Server** for centralized management.  
 - 🔧 **Applies a default Fleet policy** for Fleet Server.  
 - 🛡️ **Creates a Windows security policy** with the **Elastic Defend** package for endpoint protection.  
 - 🔄 **Registers the Elastic Agent** with Fleet for automated monitoring.  
 
-## 6️⃣ **Service Management & Finalization**  
+## 7️⃣ **Service Management & Finalization**  
 - Restart all services and check status.  
 - Monitor **Logstash CPU usage**.  
 - 🔗 **Access Kibana at:** `https://${KIBANA_HOST}:5601`  
