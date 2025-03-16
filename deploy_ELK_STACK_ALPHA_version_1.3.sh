@@ -100,6 +100,58 @@ echo "Elasticsearch host: $ELASTIC_HOST"
 echo "Kibana host: $KIBANA_HOST"
 echo "Logstash host: $LOGSTASH_HOST"
 
+# Function to validate username
+validate_username() {
+  if [[ -z "$1" || "$1" =~ [^a-zA-Z0-9_\-] ]]; then
+    echo "Invalid username. Only alphanumeric characters, underscores (_), and dashes (-) are allowed."
+    return 1
+  fi
+  return 0
+}
+
+# Function to validate password
+validate_password() {
+  if [[ -z "$1" || ${#1} -lt 8 ]]; then
+    echo "Invalid password. It must be at least 8 characters long."
+    return 1
+  fi
+  return 0
+}
+
+start_time=$(date +%s)
+# Prompt for username and validate
+while true; do
+  read -p "Enter a username for the superuser: " USERNAME
+  if validate_username "$USERNAME"; then
+    break
+  else
+    echo "Please enter a valid username."
+  fi
+done
+
+# Prompt for password and validate
+while true; do
+  read -s -p "Enter a password for the superuser: " PASSWORD
+  echo "" # Print a new line after password prompt
+  if validate_password "$PASSWORD"; then
+    read -s -p "Confirm the password: " PASSWORD_CONFIRM
+    echo "" # Print a new line after confirmation prompt
+    if [[ "$PASSWORD" == "$PASSWORD_CONFIRM" ]]; then
+      break
+    else
+      echo "Passwords do not match. Please try again."
+    fi
+  else
+    echo "Please enter a valid password."
+  fi
+done
+
+# Simulate a loading bar (optional)
+show_loading_bar 3
+end_time=$(date +%s)
+elapsed_time=$((end_time - start_time))
+echo -e "\n\033[32mSuccess!! Created Superuser variables for use later on during install which took $elapsed_time seconds.\033[0m\n"
+
 # Define Elastic version
 ELASTIC_VERSION="8.x"
 
@@ -298,7 +350,7 @@ sudo chmod -R 770 /etc/kibana/certs > /dev/null 2>&1
 show_loading_bar 3
 cd 
 # Set up Logstash SSL certificates
-echo "Setting up Kibana SSL certificates..."
+echo "Setting up Logstash SSL certificates..."
 sudo mkdir -p /etc/logstash/certs
 sudo cp /usr/share/elasticsearch/ssl/logstash/logstash.crt /etc/logstash/certs/ > /dev/null 2>&1
 sudo cp /usr/share/elasticsearch/ssl/logstash/logstash.key /etc/logstash/certs/ > /dev/null 2>&1
@@ -341,7 +393,7 @@ echo "File updated and ownership set to logstash for $file_path."
 show_loading_bar 3
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32mFinished tweaking a few Logstash settings....\033[0m\n"
+echo -e "\n\033[32mLogstash settings tweaked....\033[0m\n"
 
 # Start Elasticsearch service and report status
 echo "Starting Elasticsearch..."
@@ -358,51 +410,6 @@ logstash_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-passwo
 # Update logstash configuration with the new password
 sudo sed -i "s/<logstash_password>/$logstash_password/" /etc/logstash/logstash.yml
 
-# Function to validate username
-validate_username() {
-  if [[ -z "$1" || "$1" =~ [^a-zA-Z0-9_\-] ]]; then
-    echo "Invalid username. Only alphanumeric characters, underscores (_), and dashes (-) are allowed."
-    return 1
-  fi
-  return 0
-}
-
-# Function to validate password
-validate_password() {
-  if [[ -z "$1" || ${#1} -lt 8 ]]; then
-    echo "Invalid password. It must be at least 8 characters long."
-    return 1
-  fi
-  return 0
-}
-
-# Prompt for username and validate
-while true; do
-  read -p "Enter a username for the superuser: " USERNAME
-  if validate_username "$USERNAME"; then
-    break
-  else
-    echo "Please enter a valid username."
-  fi
-done
-
-# Prompt for password and validate
-while true; do
-  read -s -p "Enter a password for the superuser: " PASSWORD
-  echo "" # Print a new line after password prompt
-  if validate_password "$PASSWORD"; then
-    read -s -p "Confirm the password: " PASSWORD_CONFIRM
-    echo "" # Print a new line after confirmation prompt
-    if [[ "$PASSWORD" == "$PASSWORD_CONFIRM" ]]; then
-      break
-    else
-      echo "Passwords do not match. Please try again."
-    fi
-  else
-    echo "Please enter a valid password."
-  fi
-done
-
 # Create the superuser
 echo "Creating a superuser..."
 if sudo /usr/share/elasticsearch/bin/elasticsearch-users useradd "$USERNAME" -p "$PASSWORD" -r superuser > /dev/null 2>&1; then
@@ -412,16 +419,16 @@ else
   exit 1
 fi
 
-# Simulate a loading bar (optional)
-show_loading_bar 3
-
-
+start_time=$(date +%s)
 # Reset Kibana password and store it in a variable
 echo "Resetting Kibana password and saving to variable"
 show_loading_bar 5
 kibana_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u kibana -s -b)
+end_time=$(date +%s)
+elapsed_time=$((end_time - start_time))
+echo -e "\n\033[32mKibana password successfully reset in $elapsed_time seconds.\033[0m\n"
 
-
+start_time=$(date +%s)
 # Configure Kibana
 echo "Configuring Kibana yaml ..."
 sudo tee /etc/kibana/kibana.yml > /dev/null <<EOL
@@ -443,6 +450,9 @@ xpack.security.encryptionKey: "something_at_least_32_characters"
 xpack.encryptedSavedObjects.encryptionKey: "something_at_least_32_characters"
 EOL
 show_loading_bar 3
+end_time=$(date +%s)
+elapsed_time=$((end_time - start_time))
+echo -e "\n\033[32mKibana yml file successfully configured in $elapsed_time seconds.\033[0m\n"
 
 # Start Kibana service and report status
 echo "Starting Kibana..."
@@ -451,18 +461,16 @@ show_loading_bar 15
 echo "Checking Kibana status..."
 sudo systemctl status kibana --no-pager
 
+echo -e "\n\033[32mCreating Logstash directories for critical functions.\033[0m\n"
 sudo mkdir /opt/logstash_tmp
 sudo chown -R logstash:logstash /opt/logstash_tmp
 sudo chown -R logstash:logstash /usr/share/logstash
 sudo chown -R logstash:logstash /var/lib/logstash/data
 sudo chown -R logstash:logstash /etc/logstash
 
-
-#add code to sed pipeline.yml and recheck logstash permissions on /var/lib/logstash/data.
-
-
+start_time=$(date +%s)
 # Start the Elastic Stack trial license
-echo "Starting the Elastic Stack trial license..."
+echo -e "\n\033[32mStarting the Elastic Stack trial license...\033[0m\n"
 response=$(curl --request POST \
   --url "https://${ELASTIC_HOST}:9200/_license/start_trial?acknowledge=true" \
   --header 'Accept: */*' \
@@ -483,9 +491,13 @@ if echo "$response" | grep -q '"trial_was_started":true'; then
 else
     echo "Failed to start the trial license."
 fi
+end_time=$(date +%s)
+elapsed_time=$((end_time - start_time))
+echo -e "\n\033[32mStarted Elastic Stack trial license in $elapsed_time seconds.\033[0m\n"
 
+start_time=$(date +%s)
 # Obtain the OAuth2 access token
-echo "Obtaining OAuth2 access token..."
+echo -e "\n\033[32mObtaining OAuth2 access token...\033[0m\n"
 ACCESS_TOKEN=$(curl --request POST \
   --url "https://${ELASTIC_HOST}:9200/_security/oauth2/token" \
   -u "${USERNAME}:${PASSWORD}" \
@@ -506,13 +518,16 @@ echo "Stored Access Token: $api_access_token"
 
 # Display the access token
 if [ -n "$api_access_token" ]; then
-    echo "Access token obtained successfully: $api_access_token"
+	echo -e "\n\033[32mAccess token obtained successfully: $api_access_token\033[0m\n"
 else
-    echo "Failed to obtain access token."
+	echo -e "\n\033[32mFailed to obtain access token.\033[0m\n"
 fi
+end_time=$(date +%s)
+elapsed_time=$((end_time - start_time))
+echo -e "\n\033[32mCreating Access Token for follow on system critical functions took $elapsed_time seconds.\033[0m\n"
 
 # Wait for 15 seconds for packages to settle
-echo "Sending API request to Elasticsearch Waiting for 15 seconds while adding correct API key to logstash pipline..."
+echo -e "\n\033[32mSending API request to Elasticsearch Waiting for 15 seconds while adding correct API key to logstash pipline...\033[0m\n"
 show_loading_bar 15
 logstash_api_key=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
   --url "https://${ELASTIC_HOST}:9200/_security/api_key" \
@@ -563,7 +578,7 @@ decoded_value=$(echo -n $logstash_pipeline_api_key| base64 -d)
 echo "$decoded_value"
 
 # Configure logstash
-echo "Configuring Logstash Pipeline with decode API key..."
+echo -e "\n\033[32mConfiguring Logstash Conf with decoded API key for Elastic Agent communication over port 5044 using SSL certs...\033[0m\n"
 # Modify or create the Logstash input and output configuration
 sudo tee /etc/logstash/conf.d/logstash.conf > /dev/null <<EOL
 input {
@@ -586,7 +601,10 @@ output {
   }
 }
 EOL
+echo -e "\n\033[32mConfiguring Logstash Conf configured with input and output settings...\033[0m\n"
+show_loading_bar 5
 
+echo -e "\n\033[32mSetting variable paths and creating service token ...\033[0m\n"
 # Variables for ES token
 ES_BIN_PATH="/usr/share/elasticsearch/bin"
 SERVICE_NAME="my-token-$(date +%s)" # Generate a unique token name
@@ -610,28 +628,30 @@ else
   echo "Failed to create service token. Check debug output for details."
   exit 1
 fi
+echo -e "\n\033[32mService token prep work completed...\033[0m\n"
+show_loading_bar 5
 
 #Restart Elasticsearch services to take new token creation
-echo "Restarting Elasticsearch service to take new token creation..."
+echo -e "\n\033[32mRestarting Elasticsearch service to take new token creation...\033[0m\n"
 sudo systemctl restart elasticsearch
 echo "Checking Elasticsearch status..."
 sudo systemctl status elasticsearch --no-pager
 show_loading_bar 10
 
 #Starting Kibana and checking status
-echo "Checking Kibana status..."
+echo -e "\n\033[32mRChecking Kibana status...\033[0m\n"
 sudo systemctl status kibana --no-pager
 show_loading_bar 3
-echo "Things look good so far, lets continue forward...."
+echo -e "\n\033[33mThe installation hasn't failed yet... Things look good so far, continuing forward....\033[0m\n"
 show_loading_bar 3
 
 #Start the linux elastic agent download for fleet server....
-echo "Downloading Linux Elastic Agent to host for Fleet server setup..... standby....... ;)"
+echo -e "\n\033[34mDownloading Linux Elastic Agent to host for Fleet server setup..... standby....... ;)\033[0m\n"
 show_loading_bar 3
 
 #This is for Elastic Agent version 8.17.2. In the future this will need to be updated our replaced with a variable for easy update.
-URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.17.2-linux-x86_64.tar.gz"
-FILE="elastic-agent-8.17.2-linux-x86_64.tar.gz"
+URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.17.3-linux-x86_64.tar.gz"
+FILE="elastic-agent-8.17.3-linux-x86_64.tar.gz"
 USER_HOME=$(eval echo ~"$SUDO_USER")  # Get the original user's home directory
 DEST_DIR="$USER_HOME"
 DEST_PATH="$DEST_DIR/$FILE"
@@ -660,9 +680,9 @@ echo "Downloading $FILE..."
 curl -L -o "$DEST_PATH" "$URL" --progress-bar
 
 if [ $? -eq 0 ]; then
-  echo "Download completed successfully."
+  echo -e "\n\033[33mDownload completed successfully....\033[0m\n"
 else
-  echo "Download failed."
+  echo -e "\n\033[31mDownload failed...Does your box have stable internet connection???\033[0m\n"
   exit 1
 fi
 
@@ -670,14 +690,15 @@ fi
 tar xzvf "$DEST_PATH" -C "$DEST_DIR" & progress_bar
 
 if [ $? -eq 0 ]; then
-  echo "Extraction completed successfully."
+  echo -e "\n\033[32mExtraction completed successfully....\033[0m\n"
 else
   echo "Extraction failed."
+  echo -e "\n\033[31mExtraction failed....\033[0m\n"
   exit 1
 fi
 
 # Create Fleet Policy
-echo "Creating fleet policy..."
+echo -e "\033[1;33mCreating fleet policy...\033[0m"
 fleet_policy_id=$(curl --request POST \
   --url "https://${ELASTIC_HOST}:5601/api/fleet/agent_policies?sys_monitoring=true" \
   --header 'Accept: */*' \
@@ -700,11 +721,11 @@ fleet_policy_id=$(curl --request POST \
 echo $fleet_policy_id
 
 # Output the fleet policy ID
-echo "Fleet Policy ID: $fleet_policy_id"
+echo -e "\033[1;33mFleet Policy ID: $fleet_policy_id...\033[0m"
 show_loading_bar 5
 
 # Create Fleet Server Host on https://elastic_ip:8220
-echo "Creating Fleet Server Host via Elastic API..."
+echo -e "\n\033[31mCreating Fleet Server Host via Elastic API..\033[0m\n"
 fleet_server_host=$(curl --request POST \
   --url "https://${ELASTIC_HOST}:5601/api/fleet/fleet_server_hosts" \
   --header 'Accept: */*' \
@@ -717,18 +738,18 @@ fleet_server_host=$(curl --request POST \
   --insecure)
 
 # Output the Fleet Server Host response
-echo "Fleet Server Host Response: $fleet_server_host"
+echo -e "\033[1;33mFleet Server Host Response: $fleet_server_host.\033[0m"
 show_loading_bar 10
 
 # Variables
 USER_HOME="/home/$(logname)"
-ELASTIC_AGENT_DIR="elastic-agent-8.17.2-linux-x86_64"
+ELASTIC_AGENT_DIR="elastic-agent-8.17.3-linux-x86_64"
 
 # Change directory to the user's home directory where the Elastic Agent was untarred
 cd "$USER_HOME/$ELASTIC_AGENT_DIR"
 
 # Install the Elastic Agent with the specified options
-echo "$SERVICE_NAME_TOKEN"
+echo -e "\033[1;33m$SERVICE_NAME_TOKEN\033[0m"
 sudo yes | sudo ./elastic-agent install \
   --url=https://${ELASTIC_HOST}:8220 \
   --fleet-server-es=https://${ELASTIC_HOST}:9200 \
@@ -747,14 +768,15 @@ sudo yes | sudo ./elastic-agent install \
 
 # Confirm installation success
 if [ $? -eq 0 ]; then
-  echo "Elastic Agent installed successfully."
+  echo -e "\n\033[32mElastic Agent installed successfully.\033[0m"
+  
 else
-  echo "Elastic Agent installation failed."
+  echo -e "\n\033[31mElastic Agent installation failed.\033[0m"
   exit 1
 fi
 
 # Wait for 10 seconds while creating windows policy
-echo "Sending API request to Kibana Waiting for 10 seconds before creating windows policy..."
+echo -e "\n\033[32mSending API request to Kibana Waiting for 10 seconds before creating windows policy...\033[0m"
 show_loading_bar 10
 # Send the API request to create the policy and store the response
 windows_policy_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
@@ -779,7 +801,7 @@ windows_policy_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
 policy_id=$(echo "$windows_policy_info" | grep -o '"id":"[^"]*"' | sed 's/"id":"\([^"]*\)".*/\1/')
 
 # Wait for 10 seconds for Elastic Defend to merge to windows policy
-echo "Sending API request to Kibana Waiting for 15 seconds before adding Elastic Defend to windows policy..."
+echo -e "\n\033[32mSending API request to Kibana Waiting for 15 seconds before adding Elastic Defend to windows policy...\033[0m"
 show_loading_bar 15
 # Send the next API request using the extracted "id" as the policy_id
 windows_policy_EDR_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
@@ -820,28 +842,97 @@ windows_policy_EDR_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
 }' --insecure)
 
 # Output the response from the second request
-echo $windows_policy_EDR_info
+echo -e "\n\033[32m$windows_policy_EDR_info..\033[0m"
 
 # Check if the "id" was successfully extracted
 if [ -z "$policy_id" ]; then
-  echo "Failed to retrieve policy ID. Adding EDR package to Windows policy failed."
+  echo -e "\n\033[31mFailed to retrieve policy ID. Adding EDR package to Windows policy failed...\033[0m"
   exit 1
 fi
 
 # Start Logstash services
-echo "Starting logstash services..."
+echo -e "\n\033[32mStarting logstash services....\033[0m"
 sudo systemctl start logstash
-echo "Checking logstash status..."
+echo -e "\n\033[32mChecking logstash status..\033[0m"
 sudo systemctl status logstash --no-pager
 
+
+echo -e "\n\033[32mEnabling Elasticsearch, Logstash, and Kibana for persistent start upon reboot.\033[0m\n"
 sudo systemctl enable elasticsearch
+echo -e "\n\033[32mElasticsearch Enabled.\033[0m"
 sudo systemctl enable logstash
+echo -e "\n\033[32mLogstash Enabled.\033[0m"
 sudo systemctl enable kibana
+echo -e "\n\033[32mKibana Enabled.\033[0m"
 
-echo -e "\n\033[32mEverything should be good to go. Run top and watch logstash CPU to ensure its running low.\033[0m\n"
-echo -e "\n\033[32mIf the cpu settles down in 30 seconds then logstash is running correctly.\033[0m\n"
-echo -e "\n\033[32mIf it tops out CPU over %300 stop logstash with sudo systemctl stop logstash\033[0m\n"
+# Append Logstash output configuration to kibana.yml
+echo -e "\n\033[1;33mConfiguring Kibana Fleet Output to Logstash...\033[0m\n"
 
-# Output the completion message
-echo -e "\n\033[32mElastic Stack installation and configuration completed. Access Kibana at https://${KIBANA_HOST}:5601\033[0m\n"
+sudo tee -a /etc/kibana/kibana.yml > /dev/null <<EOL
+
+# Fleet Output Configuration
+xpack.fleet.outputs:
+  - id: secure-logstash-output
+    name: secure-logstash-output
+    type: logstash
+    hosts: ["${LOGSTASH_HOST}:5044"]
+    ssl:
+      certificate: "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt"
+      certificate_authorities: ["/usr/share/elasticsearch/ssl/ca/ca.crt"]
+    secrets:
+      ssl:
+        key: "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key"
+    is_default: true
+    is_default_monitoring: true
+EOL
+
+echo -e "\n\033[32mFleet Output Configuration added to kibana.yml\033[0m\n"
+
+# Enable Kibana logging for debugging
+echo -e "\n\033[1;33mEnabling Kibana logging to /var/log/kibana.log...\033[0m\n"
+
+sudo tee -a /etc/kibana/kibana.yml > /dev/null <<EOL
+
+# Logging Configuration
+logging:
+  appenders:
+    file:
+      type: file
+      fileName: /var/log/kibana.log
+      layout:
+        type: json
+  root:
+    appenders: [default, file]
+EOL
+
+echo -e "\n\033[32mLogging enabled. Check logs at /var/log/kibana.log\033[0m\n"
+
+# Ensure /var/log/kibana.log is writable
+sudo touch /var/log/kibana.log
+sudo chown kibana:kibana /var/log/kibana.log
+sudo chmod 644 /var/log/kibana.log
+
+# Restart Kibana to apply changes
+echo -e "\n\033[1;33mRestarting Kibana to apply changes...\033[0m\n"
+sudo systemctl restart kibana
+
+echo -e "\n\033[32mEverything should be good to go. Run top and watch Logstash CPU to ensure it's running low.\033[0m\n"
+echo -e "\n\033[32mIf the CPU settles down in 30 seconds, Logstash is running correctly.\033[0m\n"
+echo -e "\n\033[32mIf it tops out CPU over 300%, stop Logstash with:\n sudo systemctl stop logstash\033[0m\n"
+
+# Output completion message
+echo -e "\033[1;32mAccess Kibana at:\033[0m \033[1;34mhttps://${KIBANA_HOST}:5601\033[0m\n"
 echo -e "\n\033[1;33mInstallation Complete! 🎉\033[0m\n"
+
+cat << 'EOF'
+
+ ░▒▓████████▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░ ░▒▓██████▓▒░ ░▒▓███████▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+ ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░ 
+ ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░ 
+ ░▒▓██████▓▒░ ░▒▓█▓▒░      ░▒▓███████▓▒░       ░▒▓███████▓▒░░▒▓████████▓▒░░▒▓██████▓▒░░▒▓████████▓▒░ 
+ ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+ ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+ ░▒▓████████▓▒░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░ 
+ 
+EOF
+
