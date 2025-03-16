@@ -6,9 +6,10 @@
 
 https://github.com/user-attachments/assets/da4704f8-cc7b-4702-9bec-9404fa2190c4
 
+# 🚀 ELK Stack Deployment Script 
 
-
-# 🚀 ELK Stack Deployment Script  
+## 🚨 Disclaimer
+**This script is intended for testing/training purposes only and is NOT recommended for large-scale production deployments. Yet....**
 
 ## 🔥 Overview  
 The script **`deploy_ELK_STACK_ALPHA_version_1.3.sh`** automates the deployment and configuration of the **Elastic Stack** (**Elasticsearch, Kibana, and Logstash**) on Linux.
@@ -88,7 +89,26 @@ To ensure a smooth deployment, it's recommended to use the following minimum VM 
 # 🚀 Happy Logging! 🎉  
 ---
 ## ✅ GitHub To-Do List  
-- 🔍 **System Performance Checks**  
+- 🔍 **System Performance Checks**
+  
+## 🔧 Tasks to Implement:
+- [ ] **Remote Execution Support**: Add functionality to execute commands on a remote Elasticsearch instance via SSH.
+  - Prompt for the remote host IP, username, and SSH key.
+  - Ensure the remote system has Elasticsearch installed or provide installation steps.
+  - Configure the remote Elasticsearch instance to integrate with Kibana and Logstash.
+
+- [ ] **System Health Check Before Installation**:
+  - Check **disk space** availability and recommend minimum requirements.
+  - Detect system **architecture** (x86_64, ARM) and suggest optimal settings.
+
+- [ ] **Post-Install Validation**:
+  - Verify that all services (Elasticsearch, Logstash, Kibana) are running correctly.
+  - Log any errors for debugging.
+
+## 🚀 Future Enhancements:
+- [ ] Automate Elasticsearch cluster setup (multi-node deployment).
+- [ ] Add an option for **full-stack monitoring** with Metricbeat.
+- [ ] Provide an easy rollback mechanism in case of installation failure.
 
 
 
