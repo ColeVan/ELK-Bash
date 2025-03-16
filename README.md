@@ -12,7 +12,7 @@ https://github.com/user-attachments/assets/da4704f8-cc7b-4702-9bec-9404fa2190c4
 **This script is intended for testing/training purposes only and is NOT recommended for large-scale production deployments. Yet....**
 
 ## 🔥 Overview  
-The script **`deploy_ELK_STACK_ALPHA_version_1.3.sh`** automates the deployment and configuration of the **Elastic Stack** (**Elasticsearch, Kibana, and Logstash**) on Linux.
+The script **`deploy_ELK_STACK.sh`** automates the deployment and configuration of the **Elastic Stack** (**Elasticsearch, Kibana, and Logstash**) on Linux.
 It provides options for both single-instance and cluster deployments, handling all necessary installations, configurations, and security settings. However, the cluster deployment is still in the works so only use single instace settings when prompted.
 
 ## 🖥️ System Requirements
