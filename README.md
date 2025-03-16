@@ -84,16 +84,11 @@ To ensure a smooth deployment, it's recommended to use the following minimum VM 
 - Restart all services and check status.  
 - Monitor **Logstash CPU usage**.  
 - 🔗 **Access Kibana at:** `https://${KIBANA_HOST}:5601`  
-
 ---
-
 # 🚀 Happy Logging! 🎉  
-
 ---
-
 ## ✅ GitHub To-Do List  
 - 🔍 **System Performance Checks**  
-- 🔒 **Automate Logstash Outputs with SSL Certificates**  
 
 
 
