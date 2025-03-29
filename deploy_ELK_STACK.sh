@@ -182,15 +182,37 @@ end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
 echo -e "\n\033[32mInstallation completed successfully in $elapsed_time seconds.\033[0m\n"
 
+#!/bin/bash
 start_time=$(date +%s)
-# Update the package list and install Elasticsearch
 echo "Installing Elasticsearch..."
-sudo apt-get update > /dev/null 2>&1
-sudo apt-get install -y elasticsearch > /dev/null 2>&1
-show_loading_bar 5
+# Create a temporary file for progress updates
+progress_file=$(mktemp)
+# Function to update the progress bar in real-time
+show_loading_bar() {
+  {
+    echo 5  # Start progress at 5%
+    sudo apt-get update > /dev/null 2>&1
+    echo 20 # After updating package lists
+
+    # Start Elasticsearch installation in the background
+    sudo apt-get install -y elasticsearch 2>&1 | while read -r line; do
+      echo "$line" >> "$progress_file"  # Save logs for debugging
+
+      # Simulated progress based on package installation output
+      if [[ "$line" == *"Reading database"* ]]; then echo 30; fi
+      if [[ "$line" == *"Preparing to unpack"* ]]; then echo 50; fi
+      if [[ "$line" == *"Unpacking elasticsearch"* ]]; then echo 70; fi
+      if [[ "$line" == *"Setting up elasticsearch"* ]]; then echo 90; fi
+    done
+    echo 100 # Completion
+  } | whiptail --gauge "Installing Elasticsearch..." 10 70 0
+}
+show_loading_bar
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32mInstallation completed successfully in $elapsed_time seconds.\033[0m\n"
+echo -e "\n\033[32m✔ Installation completed successfully in $elapsed_time seconds.\033[0m\n"
+# Clean up
+rm -f "$progress_file"
 
 start_time=$(date +%s)
 # Configure Elasticsearch
@@ -226,13 +248,28 @@ elapsed_time=$((end_time - start_time))
 echo -e "\n\033[32mInitial Configuration of Elasticsearch completed successfully in $elapsed_time seconds.\033[0m\n"
 
 start_time=$(date +%s)
-# Install Kibana
 echo "Installing Kibana..."
-sudo apt-get install -y kibana > /dev/null 2>&1
-show_loading_bar 5
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32mInstallation completed successfully in $elapsed_time seconds.\033[0m\n"
+# Create a temporary file for progress tracking
+progress_file=$(mktemp)
+# Function to show progress dynamically
+show_loading_bar() {
+  {
+    echo 5   # Start at 5%
+    sudo apt-get update > /dev/null 2>&1
+    echo 20  # After updating package lists
+    # Install Kibana while tracking progress
+    sudo apt-get install -y kibana 2>&1 | while read -r line; do
+      echo "$line" >> "$progress_file"  # Save logs for debugging
+      # Update progress dynamically based on installation messages
+      if [[ "$line" == *"Reading database"* ]]; then echo 30; fi
+      if [[ "$line" == *"Preparing to unpack"* ]]; then echo 50; fi
+      if [[ "$line" == *"Unpacking kibana"* ]]; then echo 70; fi
+      if [[ "$line" == *"Setting up kibana"* ]]; then echo 90; fi
+    done
+    echo 100  # Completion
+  } | whiptail --gauge "Installing Kibana..." 10 70 0
+}
+show_loading_bar
 
 start_time=$(date +%s)
 # Configure Kibana
@@ -261,14 +298,35 @@ end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
 echo -e "\n\033[32mInitial Configuration of Kibana completed successfully in $elapsed_time seconds.\033[0m\n"
 
+#!/bin/bash
 start_time=$(date +%s)
-# Install Logstash
 echo "Installing Logstash..."
-sudo apt-get install -y logstash > /dev/null 2>&1
-show_loading_bar 5
+# Create a temporary file for progress tracking
+progress_file=$(mktemp)
+# Function to show progress dynamically
+show_loading_bar() {
+  {
+    echo 5   # Start at 5%
+    sudo apt-get update > /dev/null 2>&1
+    echo 20  # After updating package lists
+    # Install Logstash while tracking progress
+    sudo apt-get install -y logstash 2>&1 | while read -r line; do
+      echo "$line" >> "$progress_file"  # Save logs for debugging
+      # Update progress dynamically based on installation messages
+      if [[ "$line" == *"Reading database"* ]]; then echo 30; fi
+      if [[ "$line" == *"Preparing to unpack"* ]]; then echo 50; fi
+      if [[ "$line" == *"Unpacking logstash"* ]]; then echo 70; fi
+      if [[ "$line" == *"Setting up logstash"* ]]; then echo 90; fi
+    done
+    echo 100  # Completion
+  } | whiptail --gauge "Installing Logstash..." 10 70 0
+}
+show_loading_bar
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32mInstallation completed successfully in $elapsed_time seconds.\033[0m\n"
+echo -e "\n\033[32m✔ Logstash installation completed successfully in $elapsed_time seconds.\033[0m\n"
+# Clean up temp file
+rm -f "$progress_file"
 
 start_time=$(date +%s)
 # Configure logstash
@@ -649,7 +707,7 @@ show_loading_bar 3
 echo -e "\n\033[34mDownloading Linux Elastic Agent to host for Fleet server setup..... standby....... ;)\033[0m\n"
 show_loading_bar 3
 
-#This is for Elastic Agent version 8.17.2. In the future this will need to be updated our replaced with a variable for easy update.
+#This is for Elastic Agent version 8.17.3. In the future this will need to be updated our replaced with a variable for easy update.
 URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.17.3-linux-x86_64.tar.gz"
 FILE="elastic-agent-8.17.3-linux-x86_64.tar.gz"
 USER_HOME=$(eval echo ~"$SUDO_USER")  # Get the original user's home directory
@@ -856,37 +914,64 @@ sudo systemctl start logstash
 echo -e "\n\033[32mChecking logstash status..\033[0m"
 sudo systemctl status logstash --no-pager
 
+start_time=$(date +%s)
+echo -e "\n\033[32mPulling certs and keys into a variable for API request payload...\033[0m\n"
+# Read the CA, certificate, and key contents, properly formatting them for JSON/YAML
+CA_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/ca/ca.crt | sed ':a;N;$!ba;s/\n/\\n/g')
+CERT_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt | sed ':a;N;$!ba;s/\n/\\n/g')
+KEY_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key | sed ':a;N;$!ba;s/\n/\\n/g')
 
-echo -e "\n\033[32mEnabling Elasticsearch, Logstash, and Kibana for persistent start upon reboot.\033[0m\n"
-sudo systemctl enable elasticsearch
-echo -e "\n\033[32mElasticsearch Enabled.\033[0m"
-sudo systemctl enable logstash
-echo -e "\n\033[32mLogstash Enabled.\033[0m"
-sudo systemctl enable kibana
-echo -e "\n\033[32mKibana Enabled.\033[0m"
+# Define the JSON payload with properly formatted YAML
+echo -e "\n\033[32mSetting Logstash output as default output...\033[0m\n"
+JSON_PAYLOAD=$(cat <<EOF
+{
+  "name": "Logstash Output",
+  "type": "logstash",
+  "is_default": true,
+  "is_default_monitoring": true,
+  "hosts": ["${LOGSTASH_HOST}:5044"],
+  "config_yaml": "ssl:\\n  certificate: |\\n$CERT_CONTENT\\n  certificate_authorities: |\\n$CA_CONTENT\\n  key: |\\n$KEY_CONTENT"
+}
+EOF
+)
 
-# Append Logstash output configuration to kibana.yml
-echo -e "\n\033[1;33mConfiguring Kibana Fleet Output to Logstash...\033[0m\n"
+# Obtain the OAuth2 access token for creating logstash ssl output in Fleet settings
+echo -e "\n\033[32mObtaining OAuth2 access token to setup Logstash SSL output for Fleet server...\033[0m\n"
+ACCESS_TOKEN_LOGSTASH=$(curl --request POST \
+  --url "https://${ELASTIC_HOST}:9200/_security/oauth2/token" \
+  -u "${USERNAME}:${PASSWORD}" \
+  --header 'Content-Type: application/json' \
+  --insecure \
+  --data '{
+    "grant_type": "password",
+    "username": "'"${USERNAME}"'",
+    "password": "'"${PASSWORD}"'"
+  }')
 
-sudo tee -a /etc/kibana/kibana.yml > /dev/null <<EOL
+# Display the access token and store it into a new variable
+echo "Access Token: $ACCESS_TOKEN_LOGSTASH"
+api_access_token_logstash=$(echo "$ACCESS_TOKEN_LOGSTASH" | grep -o '"access_token":"[^"]*"' | sed 's/"access_token":"\([^"]*\)".*/\1/')
 
-# Fleet Output Configuration
-xpack.fleet.outputs:
-  - id: secure-logstash-output
-    name: secure-logstash-output
-    type: logstash
-    hosts: ["${LOGSTASH_HOST}:5044"]
-    ssl:
-      certificate: "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt"
-      certificate_authorities: ["/usr/share/elasticsearch/ssl/ca/ca.crt"]
-    secrets:
-      ssl:
-        key: "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key"
-    is_default: true
-    is_default_monitoring: true
-EOL
+# Display the access token
+if [ -n "$api_access_token_logstash" ]; then
+	echo -e "\n\033[32mAccess token obtained successfully: $api_access_token_logstash\033[0m\n"
+else
+	echo -e "\n\033[32mFailed to obtain access token.\033[0m\n"
+fi
 
-echo -e "\n\033[32mFleet Output Configuration added to kibana.yml\033[0m\n"
+# Send API request
+curl -X 'POST' \
+  --url "https://${ELASTIC_HOST}:5601/api/fleet/outputs" \
+  -H "Authorization: Bearer $api_access_token_logstash" \
+  -H "kbn-xsrf: true" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  --data-binary "$JSON_PAYLOAD" \
+  --insecure
+
+end_time=$(date +%s)
+elapsed_time=$((end_time - start_time))
+echo -e "\n\033[32mFinished creating Fleet server Logstash output.\033[0m\n"
 
 # Enable Kibana logging for debugging
 echo -e "\n\033[1;33mEnabling Kibana logging to /var/log/kibana.log...\033[0m\n"
@@ -915,6 +1000,15 @@ sudo chmod 644 /var/log/kibana.log
 # Restart Kibana to apply changes
 echo -e "\n\033[1;33mRestarting Kibana to apply changes...\033[0m\n"
 sudo systemctl restart kibana
+show_loading_bar 10
+
+echo -e "\n\033[32mEnabling Elasticsearch, Logstash, and Kibana for persistent start upon reboot.\033[0m\n"
+sudo systemctl enable elasticsearch
+echo -e "\n\033[32mElasticsearch Enabled.\033[0m"
+sudo systemctl enable logstash
+echo -e "\n\033[32mLogstash Enabled.\033[0m"
+sudo systemctl enable kibana
+echo -e "\n\033[32mKibana Enabled.\033[0m"
 
 echo -e "\n\033[32mEverything should be good to go. Run top and watch Logstash CPU to ensure it's running low.\033[0m\n"
 echo -e "\n\033[32mIf the CPU settles down in 30 seconds, Logstash is running correctly.\033[0m\n"
