@@ -170,114 +170,82 @@ end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
 
 # Display success message with color
-echo -e "\n\033[32mInstallation completed successfully in $elapsed_time seconds.\033[0m\n"
-
-start_time=$(date +%s)
-# Add the Elastic APT repository
-echo "Adding Elastic APT repository..."
-curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
-echo "deb https://artifacts.elastic.co/packages/${ELASTIC_VERSION}/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-${ELASTIC_VERSION}.list > /dev/null 2>&1
-show_loading_bar 3
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32mInstallation completed successfully in $elapsed_time seconds.\033[0m\n"
+echo -e "\n\033[32mInstallation of needed components completed successfully in $elapsed_time seconds.\033[0m\n"
 
 #!/bin/bash
-start_time=$(date +%s)
-echo "Installing Elasticsearch..."
-# Create a temporary file for progress updates
-progress_file=$(mktemp)
-# Function to update the progress bar in real-time
-show_loading_bar() {
-  {
-    echo 5  # Start progress at 5%
-    sudo apt-get update > /dev/null 2>&1
-    echo 20 # After updating package lists
 
-    # Start Elasticsearch installation in the background
-    sudo apt-get install -y elasticsearch 2>&1 | while read -r line; do
-      echo "$line" >> "$progress_file"  # Save logs for debugging
+# Ensure `pv` is installed
+if ! command -v pv &> /dev/null; then
+    echo -e "\033[1;34mInstalling pv for progress visualization...\033[0m"
+    sudo apt-get install -y pv
+fi
 
-      # Simulated progress based on package installation output
-      if [[ "$line" == *"Reading database"* ]]; then echo 30; fi
-      if [[ "$line" == *"Preparing to unpack"* ]]; then echo 50; fi
-      if [[ "$line" == *"Unpacking elasticsearch"* ]]; then echo 70; fi
-      if [[ "$line" == *"Setting up elasticsearch"* ]]; then echo 90; fi
-    done
-    echo 100 # Completion
-  } | whiptail --gauge "Installing Elasticsearch..." 10 70 0
+# Function to display a progress bar using `pv`
+progress_bar() {
+    local duration=$1
+    local message=$2
+    
+    echo -ne "\033[1;34m$message\033[0m\n"
+    sleep 0.5  # Small delay for better visualization
+    echo -n "0%" 
+    echo -n "#######################" | pv -qL 10
+    echo -e " 100%\n"
 }
-show_loading_bar
+
+# Function to install a package with `pv` progress
+install_with_progress() {
+    local package_name="$1"
+    
+    progress_bar 5 "Updating package lists..."
+    sudo apt-get update | pv -lep -s 5 >/dev/null 2>&1
+
+    progress_bar 10 "Installing $package_name..."
+    sudo apt-get install -y "$package_name" 2>&1 | pv -lep -s 100
+
+    echo -e "\n\033[32m✔ $package_name installation completed successfully.\033[0m\n"
+}
+
+start_time=$(date +%s)
+
+# Add Elastic APT repository
+echo -e "\n\033[1;34mAdding Elastic APT repository...\033[0m"
+curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
+echo "deb https://artifacts.elastic.co/packages/${ELASTIC_VERSION}/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-${ELASTIC_VERSION}.list > /dev/null 2>&1
+progress_bar 3 "Adding repository..."
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32m✔ Installation completed successfully in $elapsed_time seconds.\033[0m\n"
-# Clean up
-rm -f "$progress_file"
+echo -e "\n\033[32m✔ Repository added successfully in $elapsed_time seconds.\033[0m\n"
 
-start_time=$(date +%s)
+# Install Elasticsearch
+install_with_progress "elasticsearch"
+
 # Configure Elasticsearch
-echo "Configuring Elasticsearch..."
+echo -e "\n\033[1;34mConfiguring Elasticsearch...\033[0m"
 sudo tee /etc/elasticsearch/elasticsearch.yml > /dev/null <<EOL
-# Elasticsearch configuration
 network.host: ${ELASTIC_HOST}
 http.port: 9200
 node.name: elk-edr
 path.data: /var/lib/elasticsearch
 path.logs: /var/log/elasticsearch
 xpack.security.enrollment.enabled: true
-
-# Enable encryption for HTTP API client connections, such as Kibana, Logstash, and Agents
 xpack.security.http.ssl.enabled: true
 xpack.security.http.ssl.keystore.path: certs/http.p12
-
-# Enable encryption and mutual authentication between cluster nodes
 xpack.security.transport.ssl.enabled: true
 xpack.security.transport.ssl.verification_mode: certificate
 xpack.security.transport.ssl.keystore.path: certs/transport.p12
 xpack.security.transport.ssl.truststore.path: certs/transport.p12
-
-# nodes
 cluster.initial_master_nodes: ["elk-edr"]
-
-# Allow HTTP API connections from localhost and local networks
 http.host: [_local_, _site_]
 EOL
-show_loading_bar 3
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32mInitial Configuration of Elasticsearch completed successfully in $elapsed_time seconds.\033[0m\n"
+progress_bar 3 "Configuring Elasticsearch..."
+echo -e "\n\033[32m✔ Elasticsearch configuration completed successfully.\033[0m\n"
 
-start_time=$(date +%s)
-echo "Installing Kibana..."
-# Create a temporary file for progress tracking
-progress_file=$(mktemp)
-# Function to show progress dynamically
-show_loading_bar() {
-  {
-    echo 5   # Start at 5%
-    sudo apt-get update > /dev/null 2>&1
-    echo 20  # After updating package lists
-    # Install Kibana while tracking progress
-    sudo apt-get install -y kibana 2>&1 | while read -r line; do
-      echo "$line" >> "$progress_file"  # Save logs for debugging
-      # Update progress dynamically based on installation messages
-      if [[ "$line" == *"Reading database"* ]]; then echo 30; fi
-      if [[ "$line" == *"Preparing to unpack"* ]]; then echo 50; fi
-      if [[ "$line" == *"Unpacking kibana"* ]]; then echo 70; fi
-      if [[ "$line" == *"Setting up kibana"* ]]; then echo 90; fi
-    done
-    echo 100  # Completion
-  } | whiptail --gauge "Installing Kibana..." 10 70 0
-}
-show_loading_bar
+# Install Kibana
+install_with_progress "kibana"
 
-start_time=$(date +%s)
 # Configure Kibana
-echo "Configuring Kibana..."
+echo -e "\n\033[1;34mConfiguring Kibana...\033[0m"
 sudo tee /etc/kibana/kibana.yml > /dev/null <<EOL
-# Kibana configuration
-# =================== System: Logging ===================
-
 server.port: 5601
 server.host: ${KIBANA_HOST}
 elasticsearch.hosts: ["https://${ELASTIC_HOST}:9200"]
@@ -285,48 +253,20 @@ elasticsearch.ssl.certificateAuthorities: ["/etc/kibana/certs/http_ca.crt"]
 server.ssl.enabled: true
 server.ssl.certificate: "/etc/kibana/certs/kibana.crt"
 server.ssl.key: "/etc/kibana/certs/kibana.key"
-# Specifies the path where Kibana creates the process ID file.
 pid.file: /run/kibana/kibana.pid
-# X-Pack Security
 elasticsearch.username: "kibana"
 elasticsearch.password: "<kibana_password>"
 xpack.security.encryptionKey: "something_at_least_32_characters"
 xpack.encryptedSavedObjects.encryptionKey: "something_at_least_32_characters"
 EOL
-show_loading_bar 3
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32mInitial Configuration of Kibana completed successfully in $elapsed_time seconds.\033[0m\n"
+progress_bar 3 "Configuring Kibana..."
+echo -e "\n\033[32m✔ Kibana configuration completed successfully.\033[0m\n"
 
-#!/bin/bash
-start_time=$(date +%s)
-echo "Installing Logstash..."
-# Create a temporary file for progress tracking
-progress_file=$(mktemp)
-# Function to show progress dynamically
-show_loading_bar() {
-  {
-    echo 5   # Start at 5%
-    sudo apt-get update > /dev/null 2>&1
-    echo 20  # After updating package lists
-    # Install Logstash while tracking progress
-    sudo apt-get install -y logstash 2>&1 | while read -r line; do
-      echo "$line" >> "$progress_file"  # Save logs for debugging
-      # Update progress dynamically based on installation messages
-      if [[ "$line" == *"Reading database"* ]]; then echo 30; fi
-      if [[ "$line" == *"Preparing to unpack"* ]]; then echo 50; fi
-      if [[ "$line" == *"Unpacking logstash"* ]]; then echo 70; fi
-      if [[ "$line" == *"Setting up logstash"* ]]; then echo 90; fi
-    done
-    echo 100  # Completion
-  } | whiptail --gauge "Installing Logstash..." 10 70 0
-}
-show_loading_bar
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
-echo -e "\n\033[32m✔ Logstash installation completed successfully in $elapsed_time seconds.\033[0m\n"
-# Clean up temp file
-rm -f "$progress_file"
+# Install Logstash
+install_with_progress "logstash"
+
+echo -e "\n\033[1;32m🚀 All components installed and configured successfully! 🎉\033[0m\n"
+
 
 start_time=$(date +%s)
 # Configure logstash
@@ -1029,4 +969,3 @@ cat << 'EOF'
  ░▒▓████████▓▒░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░ 
  
 EOF
-
