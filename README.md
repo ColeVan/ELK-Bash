@@ -4,7 +4,11 @@
 
 
 
-https://github.com/user-attachments/assets/da4704f8-cc7b-4702-9bec-9404fa2190c4
+
+https://github.com/user-attachments/assets/33e2cdad-5ec9-4ac0-a22b-4b9ad4001186
+
+
+
 
 # 🚀 ELK Stack Deployment Script 
 
