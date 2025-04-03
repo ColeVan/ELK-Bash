@@ -152,8 +152,8 @@ end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
 echo -e "\n\033[32mSuccess!! Created Superuser variables for use later on during install which took $elapsed_time seconds.\033[0m\n"
 
-# Define Elastic version
-ELASTIC_VERSION="8.x"
+# Prompt user for the Elastic Stack version
+read -p "Enter the Elastic Stack version to install (e.g., 8.14.3): " ELASTIC_VERSION
 
 # Function to track the time taken for installation
 start_time=$(date +%s)
@@ -171,8 +171,6 @@ elapsed_time=$((end_time - start_time))
 
 # Display success message with color
 echo -e "\n\033[32mInstallation of needed components completed successfully in $elapsed_time seconds.\033[0m\n"
-
-#!/bin/bash
 
 # Ensure `pv` is installed
 if ! command -v pv &> /dev/null; then
@@ -192,32 +190,25 @@ progress_bar() {
     echo -e " 100%\n"
 }
 
-# Function to install a package with `pv` progress
-install_with_progress() {
-    local package_name="$1"
-    
-    progress_bar 5 "Updating package lists..."
-    sudo apt-get update | pv -lep -s 5 >/dev/null 2>&1
-
-    progress_bar 10 "Installing $package_name..."
-    sudo apt-get install -y "$package_name" 2>&1 | pv -lep -s 100
-
-    echo -e "\n\033[32m✔ $package_name installation completed successfully.\033[0m\n"
-}
-
 start_time=$(date +%s)
 
 # Add Elastic APT repository
 echo -e "\n\033[1;34mAdding Elastic APT repository...\033[0m"
 curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
-echo "deb https://artifacts.elastic.co/packages/${ELASTIC_VERSION}/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-${ELASTIC_VERSION}.list > /dev/null 2>&1
+echo "deb https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list > /dev/null 2>&1
 progress_bar 3 "Adding repository..."
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
 echo -e "\n\033[32m✔ Repository added successfully in $elapsed_time seconds.\033[0m\n"
 
-# Install Elasticsearch
-install_with_progress "elasticsearch"
+# Install specific version of Elasticsearch
+progress_bar 5 "Updating package lists..."
+sudo apt-get update > /dev/null 2>&1
+
+progress_bar 10 "Installing Elasticsearch version $ELASTIC_VERSION..."
+sudo apt-get install -y "elasticsearch=$ELASTIC_VERSION" 2>&1 | pv -lep -s 100
+
+echo -e "\n\033[32m✔ Elasticsearch installation completed successfully.\033[0m\n"
 
 # Configure Elasticsearch
 echo -e "\n\033[1;34mConfiguring Elasticsearch...\033[0m"
@@ -240,8 +231,14 @@ EOL
 progress_bar 3 "Configuring Elasticsearch..."
 echo -e "\n\033[32m✔ Elasticsearch configuration completed successfully.\033[0m\n"
 
-# Install Kibana
-install_with_progress "kibana"
+# Install specific version of Kibana
+progress_bar 5 "Updating package lists..."
+sudo apt-get update > /dev/null 2>&1
+
+progress_bar 10 "Installing Kibana version $ELASTIC_VERSION..."
+sudo apt-get install -y "kibana=$ELASTIC_VERSION" 2>&1 | pv -lep -s 100
+
+echo -e "\n\033[32m✔ Kibana installation completed successfully.\033[0m\n"
 
 # Configure Kibana
 echo -e "\n\033[1;34mConfiguring Kibana...\033[0m"
@@ -262,10 +259,15 @@ EOL
 progress_bar 3 "Configuring Kibana..."
 echo -e "\n\033[32m✔ Kibana configuration completed successfully.\033[0m\n"
 
-# Install Logstash
-install_with_progress "logstash"
+# Install Logstash (keeping latest version)
+progress_bar 5 "Updating package lists..."
+sudo apt-get update > /dev/null 2>&1
+
+progress_bar 10 "Installing Logstash..."
+sudo apt-get install -y logstash 2>&1 | pv -lep -s 100
 
 echo -e "\n\033[1;32m🚀 All components installed and configured successfully! 🎉\033[0m\n"
+
 
 
 start_time=$(date +%s)
@@ -969,3 +971,4 @@ cat << 'EOF'
  ░▒▓████████▓▒░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░ 
  
 EOF
+
