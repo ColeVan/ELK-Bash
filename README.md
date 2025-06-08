@@ -32,9 +32,10 @@ https://github.com/user-attachments/assets/33e2cdad-5ec9-4ac0-a22b-4b9ad4001186
 **This script is intended for testing/training purposes only and is NOT recommended for large-scale production deployments. Yet....**
 
 ## 🔥 Overview  
-The script **`deploy_ELK_STACK.sh`** automates the deployment and configuration of the **Elastic Stack** (**Elasticsearch, Kibana, and Logstash**) on a single Linux host.
-It provides options for both single-instance (all components on one IP) and pseudo-cluster (components can have distinct IPs, but still on one host) deployments, handling necessary installations, configurations, and security settings.
-**Note:** True multi-node cluster deployment is not yet supported by this script. The "cluster" option refers to assigning different IP addresses to services on the *same* host.
+The script **`deploy_ELK_STACK.sh`** automates the deployment and configuration of the **Elastic Stack** (**Elasticsearch, Kibana, and Logstash**) on a Linux host.
+It supports deploying a single, all-in-one instance, or setting up the initial node for a multi-node Elasticsearch cluster.
+When deploying for a cluster, the script prepares the first node and includes a feature to **generate enrollment tokens** for easily adding subsequent Elasticsearch nodes.
+The "cluster" deployment option now genuinely prepares the current host as the first node of a potential multi-node cluster, rather than just allowing different IPs for services on the same host.
 
 ## 🖥️ System Requirements
 To ensure a smooth deployment, the following minimum VM specifications are **recommended**. The script does not enforce these, but performance may suffer on lesser systems.
@@ -51,10 +52,17 @@ To ensure a smooth deployment, the following minimum VM specifications are **rec
 # ✨ Features  
 
 ## 🔹 **Interactive Deployment**  
-- Choose between **single-instance** (one IP for all services) or **pseudo-cluster** (different IPs for services on the same host) deployment.
-- Set **IP addresses** for **Elasticsearch, Kibana, and Logstash**.  
+- Choose between **single-instance** (one IP for all services) or **cluster** (prepares the node for a multi-node Elasticsearch cluster) deployment.
+- If "cluster" is chosen:
+    - Confirmation if the current node will host all services (Elasticsearch, Logstash, Kibana).
+    - Selection/confirmation of the management interface IP for cluster communication.
+    - Prompts for the number of *additional* Elasticsearch nodes that will be added to this cluster.
+    - Prompts for the name for the current Elasticsearch node (e.g., `node-1`).
+- Set **IP addresses** for **Elasticsearch, Kibana, and Logstash** based on the deployment type.
 - Prompts for a **superuser username and password** for Elasticsearch.
-- Prompts for the desired **Elastic Stack version** (e.g., 8.14.3) for Elasticsearch and Kibana.
+- Prompts for the desired **Elastic Stack version** (e.g., `8.14.3`) for Elasticsearch, Kibana, and related components like Elastic Agent and Elastic Defend integration.
+- **Disk Space Confirmation:** Before proceeding with installation, asks for user confirmation regarding sufficient disk space, especially important for cluster nodes.
+- **Enrollment Token Generation:** If a cluster deployment is selected, automatically generates and saves enrollment tokens for adding new Elasticsearch nodes to the cluster.
 
 ## 🔹 **Validation Checks**  
 - Ensures **correct IPv4 address formatting**.
@@ -82,10 +90,16 @@ To ensure a smooth deployment, the following minimum VM specifications are **rec
 # 📜 Deployment Steps  
 
 ## 1️⃣ **User Input & Validation**  
-- Prompts for **deployment type**: `single` (all components share one IP) or `cluster` (components can have distinct IPs, but all reside on the *same host*).
+- Prompts for **deployment type**: `single` (all components share one IP) or `cluster` (prepares the node for a multi-node Elasticsearch cluster).
+- If "cluster" deployment is selected:
+    - Asks if the current node will host Elasticsearch, Logstash, and Kibana.
+    - Prompts for the management IP address for the node, suggesting a detected one.
+    - Asks for the number of *additional* Elasticsearch nodes that will join the cluster.
+    - Asks for a unique name for the current Elasticsearch node (e.g., `node-1`).
 - Prompts for and validates **IP addresses** for Elasticsearch, Kibana, and Logstash based on the deployment type.
 - Prompts for and validates **superuser credentials** (username and password) for Elasticsearch.
-- Prompts for the desired **Elastic Stack version** (e.g., `8.14.3`) to be used for Elasticsearch and Kibana.
+- Prompts for the desired **Elastic Stack version** (e.g., `8.14.3`) to be used for Elasticsearch, Kibana, and associated Elastic Agent/Defend versions.
+- **Disk Space Confirmation:** Requires the user to type "yes" to acknowledge disk space considerations before proceeding with installation.
 
 ## 2️⃣ **Package Installation**  
 - Updates system package lists (`apt-get update`).
@@ -96,18 +110,21 @@ To ensure a smooth deployment, the following minimum VM specifications are **rec
 
 ## 3️⃣ **Service Configuration**  
 - **Elasticsearch (`elasticsearch.yml`):**
-    - Sets `network.host`, `http.port`, `node.name` (`elk-edr`).
+    - Sets `network.host: ${ELASTIC_HOST}`.
+    - Sets `http.port: 9200`.
+    - Sets `node.name: ${NODE_NAME}` (user-defined during cluster setup, e.g., `node-1`).
     - Configures paths for data and logs.
     - Enables X-Pack security features, including SSL for HTTP and transport layers, pointing to generated certificate paths (`certs/http.p12`, `certs/transport.p12`).
-    - Defines `cluster.initial_master_nodes`.
+    - Sets `cluster.initial_master_nodes: ["${NODE_NAME}"]`.
+    - Adds `transport.host: ${ELASTIC_HOST}` for explicit binding of the transport layer.
 - **Kibana (`kibana.yml`):**
     - Sets `server.port`, `server.host`.
     - Configures `elasticsearch.hosts` to connect to Elasticsearch via HTTPS, including the path to the CA certificate (`/etc/kibana/certs/http_ca.crt`).
     - Enables SSL for Kibana's server using generated certificates (`/etc/kibana/certs/kibana.crt`, `/etc/kibana/certs/kibana.key`).
-    - Sets `elasticsearch.username` to `kibana` and `elasticsearch.password` to the **newly reset password** for the `kibana` internal user.
+    - Sets `elasticsearch.username` to `kibana` and `elasticsearch.password` to the dynamically reset password (`${kibana_password}`).
     - Configures X-Pack security encryption keys.
 - **Logstash:**
-    - **`logstash.yml`**: Configures queue type, monitoring settings (including `logstash_system` username and its **newly reset password**), Elasticsearch connection details with SSL CA (`/etc/logstash/certs/http_ca.crt`), and log paths.
+    - **`logstash.yml`**: Configures queue type, `node.name: ${NODE_NAME}`, monitoring settings (including `logstash_system` username and its dynamically reset password), Elasticsearch connection details with SSL CA (`/etc/logstash/certs/http_ca.crt`), and log paths.
     - **`pipelines.yml`**: Defines the main pipeline pointing to `"/etc/logstash/conf.d/logstash.conf"`.
     - **`jvm.options`**: Modifies heap size (e.g., to 8GB using `-Xms8g` and `-Xmx8g`) and sets a temporary directory for Java (`-Djava.io.tmpdir=/opt/logstash_tmp`).
     - **`conf.d/logstash.conf`**:
@@ -133,13 +150,13 @@ To ensure a smooth deployment, the following minimum VM specifications are **rec
 - **Fleet Service Token:** Creates an Elasticsearch service token for `elastic/fleet-server` using `elasticsearch-service-tokens create`. This token is used to enroll the Fleet Server.
 
 ## 6️⃣ **Fleet and Elastic Agent Integration**  
-- **Elastic Agent Download:** Downloads and extracts the Elastic Agent (version 8.17.3 is hardcoded in the script; this might require manual updates in the script for newer Elastic Stack versions).
+- **Elastic Agent Download:** Downloads and extracts the Elastic Agent. The version downloaded matches the user-specified `$ELASTIC_VERSION` (e.g., `elastic-agent-$ELASTIC_VERSION-linux-x86_64.tar.gz`).
 - **Fleet Policy for Fleet Server:** Creates a Fleet agent policy named "fleet-server-policy" via Kibana API (`/api/fleet/agent_policies`), configured for monitoring and to host a Fleet Server.
 - **Fleet Server Host Configuration:** Defines the Fleet Server host URL (e.g., `https://${ELASTIC_HOST}:8220`) via Kibana API (`/api/fleet/fleet_server_hosts`).
 - **Elastic Agent Installation as Fleet Server:** Installs and enrolls the downloaded Elastic Agent to function as the Fleet Server using `sudo ./elastic-agent install`. This command uses the generated service token, the "fleet-server-policy", and specifies paths to the CA and server certificates for secure communication with Elasticsearch and for its own HTTPS endpoint.
 - **Windows EDR Policy Creation:**
     - Creates a new Fleet agent policy named "Windows_EDR_and_Host_logs" via Kibana API.
-    - Adds the "Elastic Defend" integration (package version 8.17.2 is hardcoded) to this policy with the "EDRComplete" preset via Kibana API (`/api/fleet/package_policies`).
+    - Adds the "Elastic Defend" integration to this policy with the "EDRComplete" preset via Kibana API (`/api/fleet/package_policies`). The version of the "Elastic Defend" package used is dynamically set to the user-provided `$ELASTIC_VERSION`.
 - **Default Output for Fleet (Logstash):** Configures "Logstash Output" as the default output in Fleet settings via Kibana API (`/api/fleet/outputs`). This setup specifies the Logstash host and port (e.g., `${LOGSTASH_HOST}:5044`) and includes the SSL CA, certificate, and key (from `/usr/share/elasticsearch/ssl/`) for secure communication from Fleet-managed agents to Logstash.
 
 ## 7️⃣ **Service Management & Finalization**  
@@ -148,6 +165,37 @@ To ensure a smooth deployment, the following minimum VM specifications are **rec
 - Provides a final message with the Kibana access URL: `https://${KIBANA_HOST}:5601`.
 - Includes a note about monitoring Logstash CPU usage post-installation and how to stop Logstash if issues arise.
 - Appends logging configuration to `kibana.yml` to ensure Kibana logs to `/var/log/kibana.log` for easier troubleshooting, then restarts Kibana.
+- If a "cluster" deployment was chosen, it proceeds to the [Elasticsearch Cluster Setup](#-elasticsearch-cluster-setup) steps for token generation.
+---
+# 🔗 Elasticsearch Cluster Setup
+This section applies if you selected the "cluster" deployment type. The script prepares the current node as the first node of your Elasticsearch cluster and can help you generate enrollment tokens for additional nodes.
+
+After the main installation and configuration of the first node, the script will:
+1.  **Prompt for Token Generation:** Ask if you want to generate enrollment tokens for the additional Elasticsearch nodes you specified earlier (via the `NODE_COUNT` variable, which is your input + 1 for the current node).
+2.  **Token Generation Loop:** If you confirm:
+    *   It will loop from the second node up to `NODE_COUNT`.
+    *   For each additional node, it executes:
+        ```bash
+        sudo /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node
+        ```
+    *   The output (the token) is appended to a file named `enrollment_tokens.txt` in the current directory where the script is run.
+3.  **Token File:** The `enrollment_tokens.txt` file will store the tokens. It might look something like this:
+    ```
+    Node 2:
+    eyJ2ZXIiOiI4LjE0LjMiLCJhZHIiOlsiMTkyLjE2OC4xLjEwOjkyMDAiXSwiZmdyIjoiY2IwZjRj...IiwiZWsiOiJNVFkyTXprek5UVTBOekkxTmcwPSJ9Cg==
+
+    Node 3:
+    eyJ2ZXIiOiI4LjE0LjMiLCJhZHIiOlsiMTkyLjE2OC4xLjEwOjkyMDAiXSwiZmdyIjoiNzRkYzYx...IiwiZWsiOiJNVFkyTXprek5UVTBOekkxTmcwPSJ9Cg==
+    ```
+    (Note: The tokens above are examples and will be much longer.)
+4.  **Manual Token Generation:** If token generation is skipped or fails, the script reminds you that you can manually generate a token for a new node using:
+    ```bash
+    sudo /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node
+    ```
+    You would run this on the existing, already-configured Elasticsearch node (the one set up by this script) when you are ready to add a new node to the cluster.
+
+Use these tokens when setting up new Elasticsearch nodes to securely join them to this cluster. Each token is for a single new node.
+
 ---
 # 🚀 Happy Logging! 🎉  
 ---
@@ -175,12 +223,18 @@ To use the ELK Stack deployment script, follow these steps:
 
 4.  **Follow the prompts:**
     Upon execution, the script will guide you through the setup process:
-    *   **Deployment Type:** Choose between `single` (all services use one IP) or `cluster` (services can have different IPs, but all on the same host machine). The "cluster" option does not configure a multi-node ELK cluster.
+    *   **Deployment Type:** Choose between `single` (all services use one IP) or `cluster` (prepares the current node for a multi-node Elasticsearch cluster).
+        *   If `cluster` is chosen, you'll be asked for:
+            *   Confirmation if the current node will host all services (Elasticsearch, Logstash, Kibana).
+            *   The management IP for the node.
+            *   The number of *additional* Elasticsearch nodes for the cluster.
+            *   A name for the current Elasticsearch node (e.g., `node-1`).
     *   **IP Addresses:** Enter the IPv4 addresses for Elasticsearch, Kibana, and Logstash as prompted.
-    *   **Superuser Credentials:** Set up a username and password for the Elasticsearch superuser. This user will have full `superuser` role access to the stack.
-    *   **Elastic Stack Version:** Enter the desired version for Elasticsearch and Kibana (e.g., `8.14.3`). Make sure this version is available in the Elastic APT repository. Logstash will be installed as the latest version available in the repository at the time of script execution, which may differ from the Elasticsearch/Kibana version.
+    *   **Superuser Credentials:** Set up a username and password for the Elasticsearch superuser.
+    *   **Elastic Stack Version:** Enter the desired version for Elasticsearch, Kibana, and related components (e.g., `8.14.3`). This version will also be used for downloading the corresponding Elastic Agent and for setting the Elastic Defend integration version. Logstash will be installed as the latest version available in the repository.
+    *   **Disk Space Confirmation:** You'll be asked to confirm you understand disk space requirements.
 
-    The script will then automate the installation and configuration of Elasticsearch, Kibana, and Logstash, including setting up security features like SSL certificates and API keys.
+    The script will then automate the installation and configuration. If "cluster" mode was selected, it will offer to generate enrollment tokens for additional nodes (see [Elasticsearch Cluster Setup](#-elasticsearch-cluster-setup)).
 
 ## ❓ Troubleshooting
 This section covers common issues you might encounter during or after deployment and how to resolve them.
@@ -239,13 +293,24 @@ This section covers common issues you might encounter during or after deployment
         *   Verify the Logstash pipeline configuration (`/etc/logstash/conf.d/logstash.conf`). Ensure the `input.elastic_agent` and `output.elasticsearch` sections are correct.
         *   Check the Elasticsearch API key (`api_key => "..."`) in the `output.elasticsearch` block of `logstash.conf`. Confirm it's the correct decoded key generated by the script and that it has the necessary permissions (the script creates one with specific roles like `logstash-output`).
         *   Confirm Elasticsearch output settings in `logstash.conf`, especially `ssl_certificate_authorities => '/etc/logstash/certs/http_ca.crt'`, are pointing to the correct CA certificate that Elasticsearch's HTTP layer is using.
-    *   **Elastic Agent Version Mismatch:** The script hardcodes Elastic Agent version `8.17.3` for download and the Elastic Defend package version `8.17.2` for the Windows policy. If you selected a significantly different `ELASTIC_VERSION` for Elasticsearch & Kibana during prompts, there might be compatibility issues or features not working as expected. Ideally, all Elastic Stack components, including the Agent and its integrations/packages, should align closely in version. Future script versions might need to handle this versioning more dynamically.
+    *   **Elastic Agent Version:** The script now uses the user-provided `$ELASTIC_VERSION` to download the matching Elastic Agent (e.g., `elastic-agent-$ELASTIC_VERSION-linux-x86_64.tar.gz`) and to set the Elastic Defend integration version in the Windows policy. Ensure this version is valid and available. If you encounter issues, verify the specified version exists in Elastic's download repositories.
 
 6.  **Resource Limitations:**
-    *   **Low Memory, CPU, or Disk Space:** Elasticsearch and Logstash are resource-intensive. The script configures Logstash with an 8GB heap (`-Xms8g`, `-Xmx8g` in `jvm.options`), which is substantial.
-        *   Refer to the **[System Requirements](#️-system-requirements)** section. These are recommendations; falling below them, especially on RAM, can lead to instability, services failing to start, or poor performance.
+    *   **Low Memory, CPU, or Disk Space:** Elasticsearch and Logstash are resource-intensive. The script configures Logstash with an 8GB heap (`-Xms8g`, `-Xmx8g` in `jvm.options`), which is substantial. The script also includes a disk space confirmation prompt.
+        *   Refer to the **[System Requirements](#️-system-requirements)** section.
         *   Check current system resource usage (e.g., using `htop`, `free -m`, `df -h`).
-        *   Elasticsearch and Logstash logs often indicate resource exhaustion (e.g., OutOfMemoryError in Logstash, circuit breaker exceptions in Elasticsearch).
+        *   Elasticsearch and Logstash logs often indicate resource exhaustion.
+
+7.  **Cluster Enrollment Issues:**
+    *   **Token generation failed:**
+        *   Check Elasticsearch logs (`sudo journalctl -u elasticsearch` or files in `/var/log/elasticsearch/`) on the primary node immediately after the script attempts token generation.
+        *   Ensure the `/usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token` script has execute permissions and that there are no underlying Elasticsearch issues preventing token creation (e.g., cluster health red, insufficient master nodes if it was already part of a degraded cluster).
+    *   **Nodes not joining cluster:**
+        *   **Network Connectivity:** Verify that new nodes can reach the primary node on the `transport.host` IP (e.g., `${ELASTIC_HOST}`) and port `9300` (default transport port, though not explicitly set in script, it's implied by `transport.host`). Also, ensure new nodes can reach the primary node on the Elasticsearch HTTP port (`9200`) as listed in the enrollment token.
+        *   **Firewall:** Check firewalls (`ufw`, `firewalld`, cloud security groups) on all nodes. Ports `9200` and `9300` must be open between cluster members.
+        *   **`transport.host` Configuration:** Ensure `transport.host` is correctly set in `elasticsearch.yml` on all nodes to an IP address reachable by other nodes in the cluster. The script sets this for the first node. Subsequent nodes configured manually or by other means also need this.
+        *   **Correct Token:** Double-check that the exact enrollment token generated by the primary node is being used on the new node during its setup process. Each token is for one node only.
+        *   **Elasticsearch Logs on New Node:** Check the Elasticsearch logs on the node attempting to join for errors related to discovery or joining (e.g., "failed to join cluster," "master not discovered").
 
 If you encounter an issue not listed here, check the service logs first, as they often provide detailed error messages that can help pinpoint the problem.
 
