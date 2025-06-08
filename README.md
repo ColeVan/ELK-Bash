@@ -15,12 +15,12 @@ https://github.com/user-attachments/assets/33e2cdad-5ec9-4ac0-a22b-4b9ad4001186
 
 
 ## Table of Contents
-- [Overview](#🔥-overview)
-- [System Requirements](#🖥️-system-requirements)
-- [Features](#✨-features)
-- [Deployment Steps](#📜-deployment-steps)
-- [Fleet and Elastic Agent Integration](#6️⃣-fleet-and-elastic-agent-integration)
-- [GitHub To-Do List](#✅-github-to-do-list)
+- [Overview](#-overview)
+- [System Requirements](#-system-requirements)
+- [Features](#-features)
+- [Deployment Steps](#-deployment-steps)
+- [Fleet and Elastic Agent Integration](#-fleet-and-elastic-agent-integration)
+- [GitHub To-Do List](#-github-to-do-list)
 - [Usage](#-usage)
 - [Troubleshooting](#-troubleshooting)
 - [Contributing](#-contributing)
