@@ -4,7 +4,8 @@
 **Note on Images:** The images currently linked are GitHub user-specific assets and might not render for everyone.
 For wider visibility, these images should be embedded directly into the repository or removed if not essential.
 -->
-![htb_pic](https://github.com/user-attachments/assets/d786152b-9751-499d-aaef-f9d1c4f0ba21)
+![image](https://github.com/user-attachments/assets/0a32cf58-c5f5-4905-828d-8221ecb6c7cc)
+
 
 
 
