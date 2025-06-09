@@ -4,8 +4,9 @@
 **Note on Images:** The images currently linked are GitHub user-specific assets and might not render for everyone.
 For wider visibility, these images should be embedded directly into the repository or removed if not essential.
 -->
-![image](https://github.com/user-attachments/assets/0a32cf58-c5f5-4905-828d-8221ecb6c7cc)
 
+
+![image](https://github.com/user-attachments/assets/a464873d-577a-41a2-a63a-e1d04290e92b)
 
 
 
@@ -30,7 +31,7 @@ https://github.com/user-attachments/assets/33e2cdad-5ec9-4ac0-a22b-4b9ad4001186
 # 🚀 ELK Stack Deployment Script 
 
 ## 🚨 Disclaimer
-**This script is intended for testing/training purposes only and is NOT recommended for large-scale production deployments. Yet....**
+**For operational use deploy at your own risk.**
 
 ## 🔥 Overview  
 The script **`deploy_ELK_STACK.sh`** automates the deployment and configuration of the **Elastic Stack** (**Elasticsearch, Kibana, and Logstash**) on a Linux host.
