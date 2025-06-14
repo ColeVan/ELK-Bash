@@ -1,236 +1,209 @@
 #!/bin/bash
 
-cat << 'EOF'
-
- ░▒▓████████▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░ ░▒▓██████▓▒░ ░▒▓███████▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓██████▓▒░ ░▒▓█▓▒░      ░▒▓███████▓▒░       ░▒▓███████▓▒░░▒▓████████▓▒░░▒▓██████▓▒░░▒▓████████▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓████████▓▒░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░
-
-EOF
-
-# Function to display a loading bar
-show_loading_bar() {
-    local DURATION=$1
-    local PROGRESS=0
-    while [ $PROGRESS -lt $DURATION ]; do
-        echo -n "."
-        sleep 1
-        PROGRESS=$((PROGRESS + 1))
-    done
-    echo ""
-}
-
-# Function to show a progress bar with color
-show_loading_bar() {
-    local duration=$1
-    local interval=1  # Use 1 second for each step
-    local count=$((duration / interval))
-    local i=0
-    local bar=""
-    echo -n "["
-    while [ $i -le $count ]; do
-        bar="#"
-        echo -n "$bar"
-        sleep $interval
-        ((i++))
-    done
-    echo "]"
-}
-
-# Function to validate if the IP address is valid
-validate_ip() {
-    local ip=$1
-    if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-        for segment in ${ip//./ }; do
-            if ((segment < 0 || segment > 255)); then
-                echo "Invalid IP: $ip. Out of range."
-                return 1
-            fi
-        done
-        return 0
-    else
-        echo "Invalid IP: $ip. Format is incorrect."
-        return 1
-    fi
-}
-
-#!/bin/bash
-
-# Define colors
-GREEN='[0;32m'
-NC='[0m' # No Color
-
-# Function to validate IP address
-validate_ip() {
-    local ip=$1
-    local valid_check=$(echo "$ip" | awk -F'.' '$1<=255 && $2<=255 && $3<=255 && $4<=255')
-    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ ! -z "$valid_check" ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Inform user this script is for Elasticsearch node only
-echo -e "${GREEN}This script is intended to deploy an Elasticsearch node which will be joined to your cluster.${NC}"
-read -p "$(echo -e ${GREEN}'Do you want to continue? (y/n): '${NC})" CONFIRM
-
-if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-    echo -e "${GREEN}Exiting script. No changes made.${NC}"
-    exit 0
+# Source common functions
+# Assume common_functions.sh is in the same directory or made available on the new node
+if [ -f ./common_functions.sh ]; then
+  source ./common_functions.sh
+else
+  echo -e "${RED}ERROR: common_functions.sh not found. Please ensure it's available.${NC}"
+  exit 1
 fi
 
-# Prompt for Elasticsearch host IP
-read -p "$(echo -e ${GREEN}'Enter the IP address for this Elasticsearch node: '${NC})" ELASTIC_HOST
+echo -e "${CYAN}=== Elasticsearch - Add New Node to Cluster Script ===${NC}"
+echo "This script will add a new Elasticsearch node to an existing cluster."
 
-# Validate Elasticsearch IP
-if ! validate_ip "$ELASTIC_HOST"; then
-    echo -e "${GREEN}Invalid IP address entered: $ELASTIC_HOST${NC}"
-    exit 1
+# --- User Input & Configuration ---
+ELK_VARS_FILE="elk_vars.conf" # Path to elk_vars if transferred to new node
+LOADED_ELASTIC_VERSION=""
+LOADED_SUPERUSER_USERNAME=""
+LOADED_SUPERUSER_PASSWORD=""
+
+if [ -f "${ELK_VARS_FILE}" ]; then
+  echo -e "${YELLOW}Found ${ELK_VARS_FILE}. Attempting to load variables...${NC}"
+  source "${ELK_VARS_FILE}"
+  LOADED_ELASTIC_VERSION="${ELASTIC_VERSION}" # Capture from file
+  LOADED_SUPERUSER_USERNAME="${SUPERUSER_USERNAME}"
+  LOADED_SUPERUSER_PASSWORD="${SUPERUSER_PASSWORD}"
+  echo -e "${GREEN}Variables from ${ELK_VARS_FILE} loaded (if they were set).${NC}"
+else
+  echo -e "${INFO}${ELK_VARS_FILE} not found. Will prompt for all required values.${NC}"
 fi
 
-echo -e "${GREEN}Elasticsearch node will be set up at IP: $ELASTIC_HOST${NC}"
+while true; do
+  read -p "Enter the IP address for this new Elasticsearch node: " ELASTIC_HOST_IP
+  if validate_ip "${ELASTIC_HOST_IP}"; then
+    break
+  else
+    echo -e "${RED}Invalid IP address format. Please try again.${NC}"
+  fi
+done
 
-# Further deployment steps go here...
+read -p "Enter a unique name for this new Elasticsearch node (e.g., es-node-2): " NODE_NAME
+if [ -z "${NODE_NAME}" ]; then
+  echo -e "${RED}Node name cannot be empty. Exiting.${NC}"
+  exit 1
+fi
+
+if [ -n "${LOADED_ELASTIC_VERSION}" ]; then
+  read -p "Enter Elasticsearch Version [Default: ${LOADED_ELASTIC_VERSION}]: " ELASTIC_VERSION_INPUT
+  ELASTIC_VERSION=${ELASTIC_VERSION_INPUT:-$LOADED_ELASTIC_VERSION}
+else
+  read -p "Enter Elasticsearch Version (e.g., 8.10.4): " ELASTIC_VERSION
+fi
+if [ -z "${ELASTIC_VERSION}" ]; then
+  echo -e "${RED}Elasticsearch version cannot be empty. Exiting.${NC}"
+  exit 1
+fi
+
+while true; do
+  read -p "Enter the IP address of an existing master-eligible node in the cluster: " FIRST_NODE_IP_FOR_CLUSTER_INFO
+  if validate_ip "${FIRST_NODE_IP_FOR_CLUSTER_INFO}"; then
+    break
+  else
+    echo -e "${RED}Invalid IP address format for existing node. Please try again.${NC}"
+  fi
+done
+
+if [ -n "${LOADED_SUPERUSER_USERNAME}" ]; then
+  read -p "Enter Elasticsearch Superuser Username for cluster communication [Default: ${LOADED_SUPERUSER_USERNAME}]: " SUPERUSER_USERNAME_INPUT
+  SUPERUSER_USERNAME=${SUPERUSER_USERNAME_INPUT:-$LOADED_SUPERUSER_USERNAME}
+else
+  read -p "Enter Elasticsearch Superuser Username for cluster communication: " SUPERUSER_USERNAME
+fi
+if [ -z "${SUPERUSER_USERNAME}" ]; then
+  echo -e "${RED}Superuser username cannot be empty. Exiting.${NC}"
+  exit 1
+fi
+
+if [ -n "${LOADED_SUPERUSER_PASSWORD}" ]; then
+  read -s -p "Enter Elasticsearch Superuser Password for cluster communication [Press Enter to use stored if available, or type new]: " SUPERUSER_PASSWORD_INPUT
+  echo
+  SUPERUSER_PASSWORD=${SUPERUSER_PASSWORD_INPUT:-$LOADED_SUPERUSER_PASSWORD}
+else
+  read -s -p "Enter Elasticsearch Superuser Password for cluster communication: " SUPERUSER_PASSWORD
+  echo
+fi
+if [ -z "${SUPERUSER_PASSWORD}" ]; then
+  echo -e "${RED}Superuser password cannot be empty. Exiting.${NC}"
+  exit 1
+fi
+
+read -p "Enter the Enrollment Token generated by the first Elasticsearch node: " ENROLLMENT_TOKEN
+if [ -z "${ENROLLMENT_TOKEN}" ]; then
+  echo -e "${RED}Enrollment token cannot be empty. Exiting.${NC}"
+  exit 1
+fi
+
+# --- Prerequisites ---
+echo -e "${YELLOW}Installing prerequisite packages...${NC}"
+install_prerequisites
 
 
-# Optional: Display the collected IPs
-echo "Elasticsearch host: $ELASTIC_HOST"
+# --- Elasticsearch Installation ---
+echo -e "${YELLOW}Adding Elastic APT repository...${NC}"
+progress_bar 2 "Adding Elastic GPG Key & Repository..."
+wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/${ELASTIC_VERSION%.*}.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-${ELASTIC_VERSION%.*}.x.list
+echo -e "${GREEN}Elastic APT repository added.${NC}"
 
-
-# Prompt for the node name
-read -p "Enter the name you would like to assign your node name (e.g., node-1): " NODE_NAME
-
-# Prompt user for the Elastic Stack version
-read -p "Enter the Elastic Stack version to install (e.g., 8.14.3): " ELASTIC_VERSION
-
-# Function to track the time taken for installation
-start_time=$(date +%s)
-
-# Update and install prerequisites with a progress bar
-echo -e "
-Updating package lists and installing prerequisites...
-"
+echo -e "${YELLOW}Updating package lists and installing Elasticsearch ${ELASTIC_VERSION}...${NC}"
 sudo apt-get update > /dev/null 2>&1
-show_loading_bar 5
-sudo apt-get install -y curl apt-transport-https unzip > /dev/null 2>&1
-show_loading_bar 10
-
-# Calculate the time taken for the installation
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
-
-# Display success message with color
-echo -e "
-[32mInstallation of needed components completed successfully in $elapsed_time seconds.[0m
-"
-
-# Ensure `pv` is installed
-if ! command -v pv &> /dev/null; then
-    echo -e "[1;34mInstalling pv for progress visualization...[0m"
-    sudo apt-get install -y pv
+progress_bar 10 "Installing Elasticsearch (version ${ELASTIC_VERSION})... This may take a few minutes."
+if sudo apt-get install -y "elasticsearch=${ELASTIC_VERSION}"; then
+  echo -e "${GREEN}Elasticsearch ${ELASTIC_VERSION} installed successfully.${NC}"
+else
+  echo -e "${RED}Failed to install Elasticsearch ${ELASTIC_VERSION}. Please check the version and APT configuration.${NC}"
+  exit 1
 fi
 
-# Function to display a progress bar using `pv`
-progress_bar() {
-    local duration=$1
-    local message=$2
+# --- Cluster Joining and Configuration ---
+echo -e "${YELLOW}Fetching cluster name from existing node ${FIRST_NODE_IP_FOR_CLUSTER_INFO}...${NC}"
+# Using -k (insecure) for this call as the node doesn't have cluster CA yet.
+# The primary purpose is to get the cluster name. Secure join is handled by reconfigure-node.
+CLUSTER_HEALTH_RESPONSE=$(curl -k -s -u "${SUPERUSER_USERNAME}:${SUPERUSER_PASSWORD}" "https://${FIRST_NODE_IP_FOR_CLUSTER_INFO}:9200/_cluster/health?pretty")
+CLUSTER_NAME=$(echo "$CLUSTER_HEALTH_RESPONSE" | grep '"cluster_name"' | awk -F'"' '{print $4}')
 
-    echo -ne "[1;34m$message[0m
-"
-    sleep 0.5  # Small delay for better visualization
-    echo -n "0%"
-    echo -n "#######################" | pv -qL 10
-    echo -e " 100%
-"
-}
+if [ -z "${CLUSTER_NAME}" ]; then
+  echo -e "${RED}Could not fetch cluster name from ${FIRST_NODE_IP_FOR_CLUSTER_INFO}. Response:${NC}"
+  echo "${CLUSTER_HEALTH_RESPONSE}"
+  echo -e "${RED}Please check connectivity, credentials, and if the existing node is healthy. Exiting.${NC}"
+  exit 1
+fi
+echo -e "${GREEN}Detected cluster name: ${CLUSTER_NAME}${NC}"
 
-start_time=$(date +%s)
+echo -e "${YELLOW}Configuring Elasticsearch directories and initial yml settings...${NC}"
+ES_CONFIG_DIR="/etc/elasticsearch"
+ES_DATA_DIR="/var/lib/elasticsearch" # Default path.data
+ES_LOG_DIR="/var/log/elasticsearch"   # Default path.logs
 
-# Add Elastic APT repository
-echo -e "
-[1;34mAdding Elastic APT repository...[0m"
-curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
-echo "deb https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list > /dev/null 2>&1
-progress_bar 3 "Adding repository..."
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
-echo -e "
-[32m✔ Repository added successfully in $elapsed_time seconds.[0m
-"
+sudo mkdir -p "${ES_CONFIG_DIR}/certs" # reconfigure-node will place certs here
+sudo mkdir -p "${ES_DATA_DIR}"
+sudo mkdir -p "${ES_LOG_DIR}"
+sudo chown -R elasticsearch:elasticsearch "${ES_CONFIG_DIR}" "${ES_DATA_DIR}" "${ES_LOG_DIR}"
+sudo chmod -R 750 "${ES_CONFIG_DIR}" "${ES_DATA_DIR}" "${ES_LOG_DIR}"
 
-# Install specific version of Elasticsearch
-progress_bar 5 "Updating package lists..."
-sudo apt-get update > /dev/null 2>&1
+# Create a minimal elasticsearch.yml. elasticsearch-reconfigure-node will populate it.
+# It's important that this file exists and is owned by elasticsearch for reconfigure-node.
+echo -e "${YELLOW}Writing minimal elasticsearch.yml before reconfiguration...${NC}"
+sudo bash -c "cat <<EOF > ${ES_CONFIG_DIR}/elasticsearch.yml
+# This file will be mostly overwritten by elasticsearch-reconfigure-node
+cluster.name: ${CLUSTER_NAME}
+node.name: ${NODE_NAME}
+network.host: ${ELASTIC_HOST_IP}
+http.port: 9200
+path.data: ${ES_DATA_DIR}
+path.logs: ${ES_LOG_DIR}
 
-progress_bar 10 "Installing Elasticsearch version $ELASTIC_VERSION..."
-sudo apt-get install -y "elasticsearch=$ELASTIC_VERSION" 2>&1 | pv -lep -s 100
+# The following settings related to security and discovery
+# will be configured by 'elasticsearch-reconfigure-node'
+# xpack.security.enabled: true
+# xpack.security.enrollment.enabled: false # This node is joining, not enrolling others initially
+# xpack.security.http.ssl.enabled: true
+# xpack.security.transport.ssl.enabled: true
+# discovery.seed_providers: # Cleared, to be set by reconfigure
+# cluster.initial_master_nodes: # Cleared, to be set by reconfigure
+EOF"
+sudo chown elasticsearch:elasticsearch "${ES_CONFIG_DIR}/elasticsearch.yml"
+sudo chmod 660 "${ES_CONFIG_DIR}/elasticsearch.yml" # Writable by elasticsearch group too
+echo -e "${GREEN}Minimal elasticsearch.yml written.${NC}"
 
-echo -e "
-[32m✔ Elasticsearch installation completed successfully.[0m
-"
 
-progress_bar 3 "Configuring Elasticsearch..."
-echo -e "
-[32m✔ Time to create a cluster.[0m
-"
+echo -e "${YELLOW}Joining node to cluster using enrollment token...${NC}"
+# This command will reconfigure elasticsearch.yml, set up security, certificates, discovery, etc.
+# It needs to be run with sudo as it modifies system files and ES configuration.
+progress_bar 15 "Running elasticsearch-reconfigure-node... This may take some time."
+if sudo /usr/share/elasticsearch/bin/elasticsearch-reconfigure-node --enrollment-token "${ENROLLMENT_TOKEN}"; then
+  echo -e "${GREEN}Node successfully reconfigured and should be ready to join the cluster.${NC}"
+else
+  echo -e "${RED}elasticsearch-reconfigure-node command failed.${NC}"
+  echo -e "${RED}Check the output above for errors. Elasticsearch logs (/var/log/elasticsearch/) may also contain details.${NC}"
+  exit 1
+fi
 
-# Prompt for Node IP, Username, and Password (hide password input)
-read -p "Enter the first node IP: " NODE_IP
-read -p "Enter your  superuser username: " USERNAME
-read -s -p "Enter your superuser password: " PASSWORD
-echo ""
-
-# Fetch cluster health info using curl
-RESPONSE=$(curl -ksu "$USERNAME:$PASSWORD" "https://${NODE_IP}:9200/_cluster/health?pretty")
-
-# Extract cluster_name from the response
-CLUSTER_NAME=$(echo "$RESPONSE" | grep '"cluster_name"' | awk -F'"' '{print $4}')
-
-# Output the extracted cluster name
-echo -e "
-Detected Elasticsearch cluster name: [1;32m${CLUSTER_NAME}[0m"
-
-# Prompt for the cluster api token for joining cluster
-read -p "Enter the API key generated from your first node using the following cmd /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node: " CLUSTER_TOKEN
-
-sudo /usr/share/elasticsearch/bin/elasticsearch-reconfigure-node --enrollment-token $CLUSTER_TOKEN
-
-# Configure Elasticsearch - only update cluster.name and node.name
-echo -e "
-[1;34mUpdating node.name and cluster.name...[0m"
-
-# Update node.name
-sudo sed -i "s/^node\.name:.*/node.name: "${NODE_NAME}"/" /etc/elasticsearch/elasticsearch.yml
-
-# Update cluster.name
-sudo sed -i "s/^cluster\.name:.*/cluster.name: "${CLUSTER_NAME}"/" /etc/elasticsearch/elasticsearch.yml
-
-echo -e "
-[32mReloading Daemon.[0m
-"
+# --- Service Management ---
+echo -e "${YELLOW}Reloading systemd daemon, enabling and starting Elasticsearch service...${NC}"
 sudo systemctl daemon-reload
+sudo systemctl enable elasticsearch.service
+sudo systemctl start elasticsearch.service
+echo -e "${GREEN}Elasticsearch service enabled and start command issued.${NC}"
 
-echo -e "
-[32mEnabling Elasticsearch for persistent start upon reboot.[0m
-"
-sudo systemctl enable elasticsearch
+progress_bar 5 "Waiting for Elasticsearch to initialize (approx. 15-30 seconds)..."
+sleep 15
 
-echo -e "
-[32mStarting Elasticsearch.[0m
-"
-sudo systemctl start elasticsearch
+echo -e "${YELLOW}Checking Elasticsearch service status...${NC}"
+sudo systemctl status elasticsearch.service --no-pager || true # Display status, continue even if it briefly shows an error
 
-echo -e "
-[32mChecking Elasticsearch status for potential errors...[0m
-"
-sudo systemctl status elasticsearch --no-pager
+# --- Final Output ---
+echo -e "\n${CYAN}======================================================================="
+echo -e " Elasticsearch Node ${NODE_NAME} Configuration Complete"
+echo -e "=======================================================================${NC}"
+echo -e "${GREEN}The node ${NODE_NAME} (${ELASTIC_HOST_IP}) has been configured and started.${NC}"
+echo -e "${GREEN}It should now attempt to join the cluster: ${CLUSTER_NAME}.${NC}"
+echo -e "${YELLOW}Please monitor the Elasticsearch logs on this node for confirmation of successful joining:${NC}"
+echo -e "${YELLOW}  sudo journalctl -u elasticsearch.service -f${NC}"
+echo -e "${YELLOW}  sudo cat /var/log/elasticsearch/${CLUSTER_NAME}.log (or similar, log file name might vary slightly)${NC}"
+echo -e "${YELLOW}You can also check the cluster status via Kibana Stack Monitoring or by querying an existing node:${NC}"
+echo -e "${YELLOW}  curl -k -u <user>:<password> https://${FIRST_NODE_IP_FOR_CLUSTER_INFO}:9200/_cat/nodes?v${NC}"
+echo -e "${CYAN}Ensure firewall rules allow communication on ports 9200 (HTTP) and 9300 (Transport) between cluster nodes.${NC}"
 
-echo -e "
-[32mThis node has been successfully added to the Elasticsearch cluster.[0m"
-echo -e "[32mYou can now repeat the process on the next node using the corresponding token.[0m
-"
+exit 0
