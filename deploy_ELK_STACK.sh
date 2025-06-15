@@ -356,8 +356,6 @@ echo -e "
 [1;32m🚀 All components installed and configured successfully! 🎉[0m
 "
 
-
-
 start_time=$(date +%s)
 # Configure logstash
 echo "Configuring Logstash..."
@@ -422,7 +420,6 @@ sudo /usr/share/elasticsearch/bin/elasticsearch-certgen --in /usr/share/elastics
 sudo unzip /usr/share/elasticsearch/certs.zip -d /usr/share/elasticsearch/ssl/ > /dev/null 2>&1
 show_loading_bar 5
 
-
 # Set up Kibana SSL certificates
 echo "Setting up Kibana SSL certificates..."
 sudo mkdir -p /etc/kibana/certs
@@ -460,8 +457,6 @@ elapsed_time=$((end_time - start_time))
 echo -e "
 [32mFinished setting up SSL certificates for Kibana, Elasticsearch, and Logstash....[0m
 "
-
-
 start_time=$(date +%s)
 echo -e "
 [32mTweaking a few Logstash settings....[0m
@@ -1064,9 +1059,6 @@ echo -e "
 echo -e "[1;32mAccess Kibana at:[0m [1;34mhttps://${KIBANA_HOST}:5601[0m
 "
 
-
-#!/bin/bash
-
 # === Configuration ===
 TOKEN_FILE="./enrollment_tokens.txt"
 
@@ -1112,7 +1104,6 @@ ${GREEN}--- Contents of ${TOKEN_FILE} ---${NC}"
 else
     echo -e "${GREEN}Token generation skipped by user.${NC}"
 fi
-
 
 cat << 'EOF'
 
