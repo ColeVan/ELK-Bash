@@ -124,14 +124,6 @@ ${GREEN}Use the following IP for accessing this node (management interface):${NC
         fi
     done
 
-    # Validate each IP
-    for ip in "$ELASTIC_HOST" "$KIBANA_HOST" "$LOGSTASH_HOST"; do
-        if ! validate_ip $ip; then
-            echo -e "${GREEN}Exiting script due to invalid IP: $ip${NC}"
-            exit 1
-        fi
-    done
-
     # Prompt for number of nodes in the cluster
     read -p "How many additional Elasticsearch nodes will be added to this node for clustering?: " NODE_INPUT
 
