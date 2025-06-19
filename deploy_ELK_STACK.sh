@@ -59,8 +59,8 @@ validate_ip() {
 }
 
 # Define color codes
-GREEN='[0;32m'
-NC='[0m' # No Color
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
 
 # Ask if it's a single ELK stack or a cluster deployment
 read -p "Is this a single ELK stack deployment or a cluster deployment? (single/cluster): " DEPLOYMENT_TYPE
