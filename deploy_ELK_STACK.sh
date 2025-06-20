@@ -646,7 +646,7 @@ sudo sed -i "s/<logstash_password>/$logstash_password/" /etc/logstash/logstash.y
 # Create the superuser
 echo -e "${GREEN}Creating a superuser...${NC}"
 if sudo /usr/share/elasticsearch/bin/elasticsearch-users useradd "$USERNAME" -p "$PASSWORD" -r superuser > /dev/null 2>&1; then
-  echo -e "${GREEN}Superuser $USERNAME created successfully.{NC}"
+  echo -e "${GREEN}Superuser $USERNAME created successfully.${NC}"
 else
   echo -e "${RED}Failed to create superuser $USERNAME. Check logs for details.${NC}"
   exit 1
@@ -654,7 +654,7 @@ fi
 
 start_time=$(date +%s)
 # Reset Kibana password and store it in a variable
-echo -e "${GREEN}Resetting Kibana password and saving to variable{NC}"
+echo -e "${GREEN}Resetting Kibana password and saving to variable${NC}"
 show_loading_bar 5
 kibana_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u kibana -s -b)
 end_time=$(date +%s)
@@ -665,7 +665,7 @@ ${GREEN}Kibana password successfully reset in $elapsed_time seconds.${NC}
 
 
 # Configure Kibana
-echo -e "${GREEN}Configuring Kibana yaml ...{NC}"
+echo -e "${GREEN}Configuring Kibana yaml ...${NC}"
 sudo tee /etc/kibana/kibana.yml > /dev/null <<EOL
 # Kibana configuration
 # =================== System: Logging ===================
@@ -764,7 +764,7 @@ echo -e "${GREEN}Access Token: $ACCESS_TOKEN${NC}"
 api_access_token=$(echo "$ACCESS_TOKEN" | grep -o '"access_token":"[^"]*"' | sed 's/"access_token":"\([^"]*\)".*/\1/')
 
 # Display the stored access token
-echo -e "${GREEN}Stored Access Token: $api_access_token{NC}"
+echo -e "${GREEN}Stored Access Token: $api_access_token${NC}"
 
 # Display the access token
 if [ -n "$api_access_token" ]; then
