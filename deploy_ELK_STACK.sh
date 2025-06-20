@@ -15,6 +15,7 @@ EOF
 # Define color codes (ANSI escape codes)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+BLUE='\033[1;34m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
@@ -54,22 +55,62 @@ validate_ip() {
 
 # --- Prompt for ELK install history ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
-read -p "$(echo -e ${YELLOW}Type \"yes\" if this is the first time, or \"no\" to remove previous installations: ${NC})" FIRST_INSTALL
+read -p "$(echo -e ${YELLOW}Type \"yes\" if there is a previous installation on this machine, or \"no\" to continue with a fresh install: ${NC})" INSTALL_RESPONSE
 
-if [[ "$FIRST_INSTALL" =~ ^[Nn][Oo]$ ]]; then
+if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
+    PREVIOUS_INSTALL=true
+    FRESH_INSTALL=false
     echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
     show_loading_bar 3
 
-    # Stop and disable services
+    # Stop and disable services, then forcefully kill remaining processes if needed
     for svc in elasticsearch logstash kibana; do
         if systemctl list-units --type=service | grep -q "$svc"; then
             echo -e "${CYAN}Stopping and disabling $svc...${NC}"
             sudo systemctl stop "$svc" 2>/dev/null || echo -e "${YELLOW}Could not stop $svc or it was not running.${NC}"
             sudo systemctl disable "$svc" 2>/dev/null || echo -e "${YELLOW}Could not disable $svc or it was not enabled.${NC}"
         else
-            echo -e "${YELLOW}$svc service not found. Skipping...${NC}"
+            echo -e "${YELLOW}$svc service not found. Skipping systemd stop...${NC}"
         fi
+
+        # Force kill any lingering processes
+        echo -e "${CYAN}Killing any remaining $svc processes...${NC}"
+        sudo pkill -f "$svc" 2>/dev/null || echo -e "${YELLOW}No lingering $svc processes found.${NC}"
     done
+
+		# --- Clean up Elastic Agent ---
+	echo -e "${CYAN}Checking for Elastic Agent cleanup...${NC}"
+
+	# Kill any running elastic-agent processes
+	if pgrep -f elastic-agent > /dev/null; then
+		echo -e "${YELLOW}Elastic Agent process detected. Terminating...${NC}"
+		sudo pkill -f elastic-agent
+		echo -e "${GREEN}✔ Elastic Agent process terminated.${NC}"
+	else
+		echo -e "${GREEN}No running Elastic Agent process found.${NC}"
+	fi
+
+	# Remove Elastic Agent install directory
+	if [ -d "/opt/Elastic" ]; then
+		echo -e "${YELLOW}Removing existing Elastic Agent installation at /opt/Elastic...${NC}"
+		sudo rm -rf /opt/Elastic
+		echo -e "${GREEN}✔ Elastic Agent directory removed successfully.${NC}"
+	else
+		echo -e "${GREEN}No Elastic Agent directory found at /opt/Elastic. Skipping...${NC}"
+	fi
+
+	# Remove lingering systemd service unit
+	if [ -f "/etc/systemd/system/elastic-agent.service" ]; then
+		echo -e "${YELLOW}Found systemd unit file for Elastic Agent. Cleaning up...${NC}"
+		sudo systemctl disable elastic-agent 2>/dev/null || true
+		sudo rm -f /etc/systemd/system/elastic-agent.service
+		sudo systemctl daemon-reexec
+		sudo systemctl daemon-reload
+		echo -e "${GREEN}✔ Removed stale elastic-agent systemd service.${NC}"
+	else
+		echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
+	fi
+
 
     # Uninstall packages
     echo -e "${CYAN}Attempting to uninstall Elasticsearch, Logstash, and Kibana...${NC}"
@@ -97,7 +138,9 @@ if [[ "$FIRST_INSTALL" =~ ^[Nn][Oo]$ ]]; then
 
     echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
 
-elif [[ "$FIRST_INSTALL" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
+elif [[ "$INSTALL_RESPONSE" =~ ^[Nn][Oo]$ ]]; then
+    PREVIOUS_INSTALL=false
+    FRESH_INSTALL=true
     echo -e "${GREEN}Confirmed: Fresh install. Continuing setup...${NC}"
 else
     echo -e "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}"
@@ -263,27 +306,56 @@ ${GREEN}Use the following IP for accessing this node (management interface):${NC
     done
 fi
 
-echo -e "
-${GREEN}--- System Disk Usage ---${NC}"
-df -h / | awk 'NR==1 || /\/$/'  # header + root fs only
+# Check if the system is Ubuntu
+if grep -q '^NAME="Ubuntu"' /etc/os-release; then
+    echo -e "\n${BLUE}Ubuntu system detected. Proceeding with LVM check...${NC}"
 
-echo -e "
-${YELLOW}If you plan to cluster this node with additional Elasticsearch nodes, you may need to extend disk space or logical volumes to support increased data storage requirements.${NC}"
-echo -e "${YELLOW}Please confirm that you understand this recommendation before proceeding.${NC}"
+    # Check for VG free space
+    VG_NAME=$(vgdisplay | awk '/VG Name/ {print $3}')
+    FREE_EXTENTS=$(vgdisplay "$VG_NAME" | awk '/Free  PE/ {print $5}')
 
-read -p "$(echo -e ${GREEN}'Type "yes" to continue: '${NC})" USER_CONFIRM
-if [[ "$USER_CONFIRM" != "yes" ]]; then
-    echo -e "${RED}Setup aborted. Please resize disk or confirm when ready.${NC}"
-    exit 1
+    if [[ "$FREE_EXTENTS" -gt 0 ]]; then
+        echo -e "\n${BLUE}Free space detected in volume group [$VG_NAME].${NC}"
+
+        read -p "$(echo -e ${GREEN}'Would you like to extend the root Logical Volume using the available free space? (yes/no): '${NC})" EXTEND_CONFIRM
+        if [[ "$EXTEND_CONFIRM" == "yes" ]]; then
+            echo -e "${YELLOW}Attempting to extend root Logical Volume to use remaining free space...${NC}"
+
+            echo -e "\n${BLUE}Before lvextend:${NC}"
+            sudo lvdisplay
+
+            # Get LV path
+            LV_PATH=$(lvdisplay | awk '/LV Path/ {print $3}' | grep -E '/ubuntu-vg/ubuntu-lv|/mapper/ubuntu--vg--ubuntu--lv')
+
+            if [[ -n "$LV_PATH" ]]; then
+                sudo lvextend -l +100%FREE "$LV_PATH"
+
+                echo -e "\n${BLUE}After lvextend:${NC}"
+                sudo lvdisplay
+
+                echo -e "\n${BLUE}Filesystem usage before resize:${NC}"
+                df -h /
+
+                echo -e "${YELLOW}Resizing the filesystem...${NC}"
+                sudo resize2fs "$LV_PATH"
+
+                echo -e "\n${BLUE}Filesystem usage after resize:${NC}"
+                df -h /
+            else
+                echo -e "${RED}Logical Volume path not found. Skipping resize.${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Skipping LVM extension as requested by user.${NC}"
+        fi
+    else
+        echo -e "\n${BLUE}No free space detected in Volume Group [$VG_NAME]. Skipping extension steps.${NC}"
+    fi
+else
+    echo -e "\n${YELLOW}Non-Ubuntu system detected. If you are using LVM, you may need to manually extend your logical volume after installation.${NC}"
 fi
 
-
-# Simulate a loading bar (optional)
-show_loading_bar 3
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
 echo -e "
-${GREEN}Success!! Created Superuser variables for use later on during install which took $elapsed_time seconds.${NC}
+${GREEN}Created Superuser variables for use later on during install.${NC}
 "
 
 # Prompt user for the Elastic Stack version
@@ -310,54 +382,52 @@ echo -e "
 ${GREEN}Installation of needed components completed successfully in $elapsed_time seconds.${NC}
 "
 
-# Ensure `pv` is installed
-if ! command -v pv &> /dev/null; then
-    echo -e "${BLUE}Installing pv for progress visualization...${NC}"
-    sudo apt-get install -y pv
-fi
-
-# Function to display a progress bar using `pv`
-progress_bar() {
-    local duration=$1
-    local message=$2
-
-    echo -ne "${BLUE}$message${NC}
-"
-    sleep 0.5  # Small delay for better visualization
-    echo -n "0%"
-    echo -n "#######################" | pv -qL 10
-    echo -e " 100%
-"
+# Spinner function
+spinner() {
+    local pid=$!
+    local delay=0.1
+    local spinstr='|/-\'
+    local msg="$1"
+    echo -ne "${BLUE}${msg}...${NC} "
+    while [ "$(ps a | awk '{print $1}' | grep "$pid")" ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    echo " [✔]"
 }
 
 start_time=$(date +%s)
 
 # Add Elastic APT repository
-echo -e "
-${BLUE}Adding Elastic APT repository...${NC}"
-curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
-echo "deb https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list > /dev/null 2>&1
-progress_bar 3 "Adding repository..."
+echo -e "${BLUE}Adding Elastic APT repository...${NC}"
+{
+    curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
+    echo "deb https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list > /dev/null 2>&1
+} &
+spinner "Adding repository"
+
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
-echo -e "
-${GREEN}✔ Repository added successfully in $elapsed_time seconds.${NC}
-"
+echo -e "${GREEN}✔ Repository added successfully in $elapsed_time seconds.${NC}"
 
-# Install specific version of Elasticsearch
-progress_bar 5 "Updating package lists..."
-sudo apt-get update > /dev/null 2>&1
+# Install Elasticsearch
+{
+    sudo apt-get update > /dev/null 2>&1
+} &
+spinner "Updating package lists"
 
-progress_bar 10 "Installing Elasticsearch version $ELASTIC_VERSION..."
-sudo apt-get install -y "elasticsearch=$ELASTIC_VERSION" 2>&1 | pv -lep -s 100
+{
+    sudo apt-get install -y "elasticsearch=$ELASTIC_VERSION" > /dev/null 2>&1
+} &
+spinner "Installing Elasticsearch version $ELASTIC_VERSION"
 
-echo -e "
-${GREEN}✔ Elasticsearch installation completed successfully.${NC}
-"
+echo -e "${GREEN}✔ Elasticsearch installation completed successfully.${NC}"
 
 # Configure Elasticsearch
-echo -e "
-${BLUE}Configuring Elasticsearch...${NC}"
+echo -e "${BLUE}Configuring Elasticsearch...${NC}"
 sudo tee /etc/elasticsearch/elasticsearch.yml > /dev/null <<EOL
 network.host: ${ELASTIC_HOST}
 http.port: 9200
@@ -372,28 +442,27 @@ xpack.security.transport.ssl.verification_mode: certificate
 xpack.security.transport.ssl.keystore.path: certs/transport.p12
 xpack.security.transport.ssl.truststore.path: certs/transport.p12
 cluster.initial_master_nodes: ["${NODE_NAME}"]
-#http.host: [_local_, _site_]
 transport.host: ${ELASTIC_HOST}
 EOL
-progress_bar 3 "Configuring Elasticsearch..."
-echo -e "
-${GREEN}✔ Elasticsearch configuration completed successfully.${NC}
-"
 
-# Install specific version of Kibana
-progress_bar 5 "Updating package lists..."
-sudo apt-get update > /dev/null 2>&1
+sleep 2 & spinner "Configuring Elasticsearch"
+echo -e "${GREEN}✔ Elasticsearch configuration completed successfully.${NC}"
 
-progress_bar 10 "Installing Kibana version $ELASTIC_VERSION..."
-sudo apt-get install -y "kibana=$ELASTIC_VERSION" 2>&1 | pv -lep -s 100
+# Install Kibana
+{
+    sudo apt-get update > /dev/null 2>&1
+} &
+spinner "Updating package lists"
 
-echo -e "
-${GREEN}✔ Kibana installation completed successfully.${NC}
-"
+{
+    sudo apt-get install -y "kibana=$ELASTIC_VERSION" > /dev/null 2>&1
+} &
+spinner "Installing Kibana version $ELASTIC_VERSION"
+
+echo -e "${GREEN}✔ Kibana installation completed successfully.${NC}"
 
 # Configure Kibana
-echo -e "
-${BLUE}Configuring Kibana...${NC}"
+echo -e "${BLUE}Configuring Kibana...${NC}"
 sudo tee /etc/kibana/kibana.yml > /dev/null <<EOL
 server.port: 5601
 server.host: ${KIBANA_HOST}
@@ -408,25 +477,27 @@ elasticsearch.password: "<kibana_password>"
 xpack.security.encryptionKey: "something_at_least_32_characters"
 xpack.encryptedSavedObjects.encryptionKey: "something_at_least_32_characters"
 EOL
-progress_bar 3 "Configuring Kibana..."
-echo -e "
-${GREEN}✔ Kibana configuration completed successfully.${NC}
-"
 
-# Install Logstash (keeping latest version)
-progress_bar 5 "Updating package lists..."
-sudo apt-get update > /dev/null 2>&1
+sleep 2 & spinner "Configuring Kibana"
+echo -e "${GREEN}✔ Kibana configuration completed successfully.${NC}"
 
-progress_bar 10 "Installing Logstash..."
-sudo apt-get install -y logstash 2>&1 | pv -lep -s 100
+# Install Logstash
+{
+    sudo apt-get update > /dev/null 2>&1
+} &
+spinner "Updating package lists"
 
-echo -e "
-${GREEN}🚀 All components installed and configured successfully! 🎉${NC}
-"
+{
+    sudo apt-get install -y logstash > /dev/null 2>&1
+} &
+spinner "Installing Logstash"
+
+echo -e "${GREEN}🚀 All components installed and configured successfully! 🎉${NC}"
+
 
 start_time=$(date +%s)
 # Configure logstash
-echo "Configuring Logstash..."
+echo -e "${BLUE}Configuring Logstash...${NC}"
 sudo tee /etc/logstash/logstash.yml > /dev/null <<EOL
 queue.type: persisted
 path.queue: /var/lib/logstash/data
@@ -455,9 +526,13 @@ EOL
 JVM_OPTIONS_FILE="/etc/logstash/jvm.options"
 
 # Use sed to replace the lines
-sudo sed -i.bak -e 's/^-Xms[0-9]*[gG]/-Xms8g/'            -e 's/^-Xmx[0-9]*[gG]/-Xmx8g/'            -e '/-Xmx[0-9]*[gG]/a\-Djava.io.tmpdir=/opt/logstash_tmp'            "$JVM_OPTIONS_FILE"
-
-echo "JVM options updated successfully."
+sudo sed -i.bak -e 's/^-Xms[0-9]*[gG]/-Xms8g/' \
+           -e 's/^-Xmx[0-9]*[gG]/-Xmx8g/' \
+           -e '/-Xmx[0-9]*[gG]/a\-Djava.io.tmpdir=/opt/logstash_tmp' \
+           "$JVM_OPTIONS_FILE"
+echo -e "
+${GREEN}JVM options updated successfully.${NC}
+"		   
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
 echo -e "
@@ -466,7 +541,9 @@ ${GREEN}Initial Configuration of Logstash completed successfully in $elapsed_tim
 
 start_time=$(date +%s)
 # Set up SSL certificates for Elasticsearch and Kibana
-echo "Setting up SSL certificates for Kibana, Elasticsearch, and Logstash..."
+echo -e "
+${GREEN}Setting up SSL certificates for Kibana, Elasticsearch, and Logstash...${NC}
+"
 sudo mkdir -p /usr/share/elasticsearch/ssl
 sudo tee /usr/share/elasticsearch/instances.yml > /dev/null <<EOL
 instances:
@@ -489,7 +566,7 @@ sudo unzip /usr/share/elasticsearch/certs.zip -d /usr/share/elasticsearch/ssl/ >
 show_loading_bar 5
 
 # Set up Kibana SSL certificates
-echo "Setting up Kibana SSL certificates..."
+echo -e "${GREEN}Setting up Kibana SSL certificates...${NC}"
 sudo mkdir -p /etc/kibana/certs
 sudo cp /usr/share/elasticsearch/ssl/kibana/kibana.crt /etc/kibana/certs/ > /dev/null 2>&1
 sudo cp /usr/share/elasticsearch/ssl/kibana/kibana.key /etc/kibana/certs/ > /dev/null 2>&1
@@ -502,7 +579,7 @@ sudo chmod -R 770 /etc/kibana/certs > /dev/null 2>&1
 show_loading_bar 3
 cd
 # Set up Logstash SSL certificates
-echo "Setting up Logstash SSL certificates..."
+echo -e "${GREEN}Setting up Logstash SSL certificates...${NC}"
 sudo mkdir -p /etc/logstash/certs
 sudo cp /usr/share/elasticsearch/ssl/logstash/logstash.crt /etc/logstash/certs/ > /dev/null 2>&1
 sudo cp /usr/share/elasticsearch/ssl/logstash/logstash.key /etc/logstash/certs/ > /dev/null 2>&1
@@ -515,10 +592,10 @@ sudo chown -R logstash: /var/lib/logstash/  > /dev/null 2>&1
 show_loading_bar 3
 
 # Convert Logstash key to PKCS#8 format
-echo "Converting Logstash key to PKCS#8 format..."
+echo -e "${GREEN}Converting Logstash key to PKCS#8 format...${NC}"
 sudo openssl pkcs8 -inform PEM -in /etc/logstash/certs/logstash.key -topk8 -nocrypt -outform PEM -out /etc/logstash/certs/logstash.pkcs8.key
 sudo chown -R logstash: /etc/logstash/certs > /dev/null 2>&1
-echo "Logstash key converted and saved as logstash.pkcs8.key."
+echo -e "${GREEN}Logstash key converted and saved as logstash.pkcs8.key.${NC}"
 show_loading_bar 3
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
@@ -543,7 +620,7 @@ EOF"
 sudo chown logstash:logstash "$file_path"
 
 # Confirm the changes
-echo "File updated and ownership set to logstash for $file_path."
+echo -e "${GREEN}File updated and ownership set to logstash for $file_path.${NC}"
 show_loading_bar 3
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
@@ -552,14 +629,14 @@ ${GREEN}Logstash settings tweaked....${NC}
 "
 
 # Start Elasticsearch service and report status
-echo "Starting Elasticsearch..."
+echo -e "${GREEN}Starting Elasticsearch...${NC}"
 sudo systemctl start elasticsearch
 show_loading_bar 5
-echo "Checking Elasticsearch status..."
+echo -e "${GREEN}Checking Elasticsearch status...${NC}"
 sudo systemctl status elasticsearch --no-pager
 
 # Reset Logstash password and store it in a variable
-echo "Resetting Logstash password..."
+echo -e "${GREEN}Resetting Logstash password...${NC}"
 show_loading_bar 5
 logstash_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u logstash_system -s -b)
 
@@ -567,17 +644,17 @@ logstash_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-passwo
 sudo sed -i "s/<logstash_password>/$logstash_password/" /etc/logstash/logstash.yml
 
 # Create the superuser
-echo "Creating a superuser..."
+echo -e "${GREEN}Creating a superuser...${NC}"
 if sudo /usr/share/elasticsearch/bin/elasticsearch-users useradd "$USERNAME" -p "$PASSWORD" -r superuser > /dev/null 2>&1; then
-  echo "Superuser $USERNAME created successfully."
+  echo -e "${GREEN}Superuser $USERNAME created successfully.{NC}"
 else
-  echo "Failed to create superuser $USERNAME. Check logs for details."
+  echo -e "${RED}Failed to create superuser $USERNAME. Check logs for details.${NC}"
   exit 1
 fi
 
 start_time=$(date +%s)
 # Reset Kibana password and store it in a variable
-echo "Resetting Kibana password and saving to variable"
+echo -e "${GREEN}Resetting Kibana password and saving to variable{NC}"
 show_loading_bar 5
 kibana_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u kibana -s -b)
 end_time=$(date +%s)
@@ -586,9 +663,9 @@ echo -e "
 ${GREEN}Kibana password successfully reset in $elapsed_time seconds.${NC}
 "
 
-start_time=$(date +%s)
+
 # Configure Kibana
-echo "Configuring Kibana yaml ..."
+echo -e "${GREEN}Configuring Kibana yaml ...{NC}"
 sudo tee /etc/kibana/kibana.yml > /dev/null <<EOL
 # Kibana configuration
 # =================== System: Logging ===================
@@ -608,44 +685,57 @@ xpack.security.encryptionKey: "something_at_least_32_characters"
 xpack.encryptedSavedObjects.encryptionKey: "something_at_least_32_characters"
 EOL
 show_loading_bar 3
-end_time=$(date +%s)
+
 elapsed_time=$((end_time - start_time))
 echo -e "
-${GREEN}Kibana yml file successfully configured in $elapsed_time seconds.${NC}
+${GREEN}Kibana yml file successfully configured.${NC}
 "
 
 # Start Kibana service and report status
-echo "Starting Kibana..."
+echo -e "${GREEN}Starting Kibana...${NC}"
 sudo systemctl start kibana
 show_loading_bar 15
-echo "Checking Kibana status..."
+echo -e "${GREEN}Checking Kibana status...${NC}"
 sudo systemctl status kibana --no-pager
 
 echo -e "
 ${GREEN}Creating Logstash directories for critical functions.${NC}
 "
-sudo mkdir /opt/logstash_tmp
+sudo mkdir -p /opt/logstash_tmp
 sudo chown -R logstash:logstash /opt/logstash_tmp
 sudo chown -R logstash:logstash /usr/share/logstash
+sudo mkdir -p /var/lib/logstash/data
 sudo chown -R logstash:logstash /var/lib/logstash/data
 sudo chown -R logstash:logstash /etc/logstash
+
+# Ensure DLQ directory is in place
+sudo mkdir -p /var/lib/logstash/data/dead_letter_queue
+sudo chown -R logstash:logstash /var/lib/logstash/data
 
 start_time=$(date +%s)
 # Start the Elastic Stack trial license
 echo -e "
 ${GREEN}Starting the Elastic Stack trial license...${NC}
 "
-response=$(curl --request POST   --url "https://${ELASTIC_HOST}:9200/_license/start_trial?acknowledge=true"   --header 'Accept: */*'   -u "${USERNAME}:${PASSWORD}"   --header 'Cache-Control: no-cache'   --header 'Connection: keep-alive'   --header 'Content-Type: application/json'   --header 'kbn-xsrf: xxx'   --insecure)
+response=$(curl --request POST \
+  --url "https://${ELASTIC_HOST}:9200/_license/start_trial?acknowledge=true" \
+  --header 'Accept: */*' \
+  -u "${USERNAME}:${PASSWORD}" \
+  --header 'Cache-Control: no-cache' \
+  --header 'Connection: keep-alive' \
+  --header 'Content-Type: application/json' \
+  --header 'kbn-xsrf: xxx' \
+  --insecure)
 
 # Display the response
-echo "Response from the server:"
-echo "$response"
+echo -e "${GREEN}Response from the server:${NC}"
+echo -e "${GREEN}${response}${NC}"
 
 # Check if the trial was successfully started
 if echo "$response" | grep -q '"trial_was_started":true'; then
     echo "Trial license has been successfully started."
 else
-    echo "Failed to start the trial license."
+    echo "${RED}Failed to start the trial license.${NC}"
 fi
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
@@ -658,18 +748,23 @@ start_time=$(date +%s)
 echo -e "
 ${GREEN}Obtaining OAuth2 access token...${NC}
 "
-ACCESS_TOKEN=$(curl --request POST   --url "https://${ELASTIC_HOST}:9200/_security/oauth2/token"   -u "${USERNAME}:${PASSWORD}"   --header 'Content-Type: application/json'   --insecure   --data '{
+ACCESS_TOKEN=$(curl --request POST \
+  --url "https://${ELASTIC_HOST}:9200/_security/oauth2/token" \
+  -u "${USERNAME}:${PASSWORD}" \
+  --header 'Content-Type: application/json' \
+  --insecure \
+  --data '{
     "grant_type": "password",
     "username": "'"${USERNAME}"'",
     "password": "'"${PASSWORD}"'"
   }')
 
 # Display the access token
-echo "Access Token: $ACCESS_TOKEN"
-api_access_token=$(echo "$ACCESS_TOKEN" | grep -o '"access_token":"[^"]*"' | sed 's/"access_token":"\([^"]*\)".*//')
+echo -e "${GREEN}Access Token: $ACCESS_TOKEN${NC}"
+api_access_token=$(echo "$ACCESS_TOKEN" | grep -o '"access_token":"[^"]*"' | sed 's/"access_token":"\([^"]*\)".*/\1/')
 
 # Display the stored access token
-echo "Stored Access Token: $api_access_token"
+echo -e "${GREEN}Stored Access Token: $api_access_token{NC}"
 
 # Display the access token
 if [ -n "$api_access_token" ]; then
@@ -678,7 +773,7 @@ ${GREEN}Access token obtained successfully: $api_access_token${NC}
 "
 else
 	echo -e "
-${GREEN}Failed to obtain access token.${NC}
+${RED}Failed to obtain access token.${NC}
 "
 fi
 end_time=$(date +%s)
@@ -686,16 +781,22 @@ elapsed_time=$((end_time - start_time))
 echo -e "
 ${GREEN}Creating Access Token for follow on system critical functions took $elapsed_time seconds.${NC}
 "
-
 # Wait for 15 seconds for packages to settle
 echo -e "
 ${GREEN}Sending API request to Elasticsearch Waiting for 15 seconds while adding correct API key to logstash pipline...${NC}
 "
 show_loading_bar 15
-logstash_api_key=$(curl --user "${USERNAME}:${PASSWORD}" --request POST   --url "https://${ELASTIC_HOST}:9200/_security/api_key"   --header 'Accept: */*'   --header 'Cache-Control: no-cache'   --header 'Connection: keep-alive'   --header 'Content-Type: application/json'   --header 'kbn-xsrf: xxx'   --data '{
+logstash_api_key=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
+  --url "https://${ELASTIC_HOST}:9200/_security/api_key" \
+  --header 'Accept: */*' \
+  --header 'Cache-Control: no-cache' \
+  --header 'Connection: keep-alive' \
+  --header 'Content-Type: application/json' \
+  --header 'kbn-xsrf: xxx' \
+  --data '{
   "name": "fleet_logstash-api-key",
-  "role_descriptors": {
-    "logstash-output": {
+  "role_descriptors": { 
+    "logstash-output": { 
       "cluster": ["monitor"],
       "indices": [
         {
@@ -728,7 +829,7 @@ logstash_api_key=$(curl --user "${USERNAME}:${PASSWORD}" --request POST   --url 
   }
 }' --insecure)
 echo $logstash_api_key
-logstash_pipeline_api_key=$(echo "$logstash_api_key" | grep -o '"encoded":"[^"]*"' | sed 's/"encoded":"\([^"]*\)".*//')
+logstash_pipeline_api_key=$(echo "$logstash_api_key" | grep -o '"encoded":"[^"]*"' | sed 's/"encoded":"\([^"]*\)".*/\1/')
 echo $logstash_pipeline_api_key
 decoded_value=$(echo -n $logstash_pipeline_api_key| base64 -d)
 echo "$decoded_value"
@@ -772,7 +873,9 @@ ES_BIN_PATH="/usr/share/elasticsearch/bin"
 SERVICE_NAME="my-token-$(date +%s)" # Generate a unique token name
 
 # Create Service Token
-echo "Creating service token with name: $SERVICE_NAME"
+echo -e "
+${GREEN}Creating service token with name: $SERVICE_NAME ...${NC}
+"
 SERVICE_TOKEN_OUTPUT=$(sudo $ES_BIN_PATH/elasticsearch-service-tokens create elastic/fleet-server "$SERVICE_NAME" 2>&1)
 
 # Debug: Output the command response
@@ -787,7 +890,7 @@ if [ -n "$SERVICE_NAME_TOKEN" ]; then
   # Adjust ownership of Elasticsearch configuration
   sudo chown -R elasticsearch: /etc/elasticsearch > /dev/null 2>&1
 else
-  echo "Failed to create service token. Check debug output for details."
+  echo "${RED}Failed to create service token. Check debug output for details.${NC}"
   exit 1
 fi
 echo -e "
@@ -815,72 +918,61 @@ ${YELLOW}The installation hasn't failed yet... Things look good so far, continui
 "
 show_loading_bar 3
 
-#Start the linux elastic agent download for fleet server....
-echo -e "
-${GREEN}Downloading Linux Elastic Agent to host for Fleet server setup..... standby....... ;)${NC}
-"
+# --- Download Linux Elastic Agent for Fleet Server Setup ---
+echo -e "\n${GREEN}Downloading Elastic Agent for Fleet Server setup... please wait.${NC}"
 show_loading_bar 3
 
-#This is for Elastic Agent version 8.17.3. In the future this will need to be updated our replaced with a variable for easy update.
-#April 26 2025 : Made update to use variable instead of hard coded version
-URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$ELASTIC_VERSION-linux-x86_64.tar.gz"
-FILE="elastic-agent-$ELASTIC_VERSION-linux-x86_64.tar.gz"
-USER_HOME=$(eval echo ~"$SUDO_USER")  # Get the original user's home directory
+ELASTIC_AGENT_URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-${ELASTIC_VERSION}-linux-x86_64.tar.gz"
+ELASTIC_AGENT_FILE="elastic-agent-${ELASTIC_VERSION}-linux-x86_64.tar.gz"
+USER_HOME=$(eval echo ~"$SUDO_USER")
 DEST_DIR="$USER_HOME"
-DEST_PATH="$DEST_DIR/$FILE"
+DEST_PATH="$DEST_DIR/$ELASTIC_AGENT_FILE"
 
-# Function to display a progress bar
-progress_bar() {
+# Spinner for background tasks
+spinner() {
   local pid=$!
   local delay=0.1
-  local spinstr='|/-'
-  local temp
-
-  echo -n "Extracting $FILE "
-
+  local spinstr='|/-\'
+  echo -n "$1"
   while kill -0 "$pid" 2>/dev/null; do
-    temp=${spinstr#?}
+    local temp=${spinstr#?}
     printf " [%c]  " "$spinstr"
     spinstr=$temp${spinstr%"$temp"}
-    sleep "$delay"
-    printf ""
+    sleep $delay
+    printf "\b\b\b\b\b\b"
   done
-  echo ""
+  echo -e " [✔]"
 }
 
-# Download the file with progress bar
-echo "Downloading $FILE..."
-curl -L -o "$DEST_PATH" "$URL" --progress-bar
+# Download Elastic Agent with curl and built-in progress bar
+echo -e "${CYAN}Downloading: ${ELASTIC_AGENT_FILE}${NC}"
+curl -L --progress-bar -o "$DEST_PATH" "$ELASTIC_AGENT_URL"
 
 if [ $? -eq 0 ]; then
-  echo -e "
-${YELLOW}Download completed successfully....${NC}
-"
+  echo -e "${GREEN}✔ Download completed successfully.${NC}"
 else
-  echo -e "
-${RED}Download failed...Does your box have stable internet connection???${NC}
-"
+  echo -e "${RED}✘ Download failed. Please check your internet connection and try again.${NC}"
   exit 1
 fi
 
-# Extract the file with progress bar
-tar xzvf "$DEST_PATH" -C "$DEST_DIR" & progress_bar
+# Extract archive with spinner
+echo -e "${CYAN}Extracting Elastic Agent archive...${NC}"
+(
+  tar -xzf "$DEST_PATH" -C "$DEST_DIR"
+) & spinner "Extracting"
 
-if [ $? -eq 0 ]; then
-  echo -e "
-${GREEN}Extraction completed successfully....${NC}
-"
-else
-  echo "Extraction failed."
-  echo -e "
-${RED}Extraction failed....${NC}
-"
-  exit 1
-fi
+echo -e "${GREEN}✔ Elastic Agent ready at: ${DEST_DIR}/elastic-agent-${ELASTIC_VERSION}-linux-x86_64${NC}"
 
 # Create Fleet Policy
-echo -e "${YELLOW}Creating fleet policy...${NC}"
-fleet_policy_id=$(curl --request POST   --url "https://${ELASTIC_HOST}:5601/api/fleet/agent_policies?sys_monitoring=true"   --header 'Accept: */*'   --header "Authorization: Bearer $api_access_token"   --header 'Cache-Control: no-cache'   --header 'Connection: keep-alive'   --header 'Content-Type: application/json'   --header 'kbn-xsrf: xxx'   --data '{
+leet_policy_id=$(curl --request POST \
+  --url "https://${ELASTIC_HOST}:5601/api/fleet/agent_policies?sys_monitoring=true" \
+  --header 'Accept: */*' \
+  --header "Authorization: Bearer $api_access_token" \
+  --header 'Cache-Control: no-cache' \
+  --header 'Connection: keep-alive' \
+  --header 'Content-Type: application/json' \
+  --header 'kbn-xsrf: xxx' \
+  --data '{
   "name": "fleet-server-policy",
   "description": "",
   "namespace": "default",
@@ -901,8 +993,17 @@ show_loading_bar 5
 echo -e "
 ${RED}Creating Fleet Server Host via Elastic API..${NC}
 "
-fleet_server_host=$(curl --request POST   --url "https://${ELASTIC_HOST}:5601/api/fleet/fleet_server_hosts"   --header 'Accept: */*'   --header "Authorization: Bearer $api_access_token"   --header 'Cache-Control: no-cache'   --header 'Connection: keep-alive'   --header 'Content-Type: application/json'   --header 'kbn-xsrf: xxx'   --data "{"name":"Default","host_urls":["https://${ELASTIC_HOST}:8220"],"is_default":true}"   --insecure)
-
+fleet_server_host=$(curl --request POST \
+  --url "https://${ELASTIC_HOST}:5601/api/fleet/fleet_server_hosts" \
+  --header 'Accept: */*' \
+  --header "Authorization: Bearer $api_access_token" \
+  --header 'Cache-Control: no-cache' \
+  --header 'Connection: keep-alive' \
+  --header 'Content-Type: application/json' \
+  --header 'kbn-xsrf: xxx' \
+  --data "{\"name\":\"Default\",\"host_urls\":[\"https://${ELASTIC_HOST}:8220\"],\"is_default\":true}" \
+  --insecure)
+  
 # Output the Fleet Server Host response
 echo -e "${YELLOW}Fleet Server Host Response: $fleet_server_host.${NC}"
 show_loading_bar 10
@@ -915,9 +1016,23 @@ ELASTIC_AGENT_DIR="elastic-agent-$ELASTIC_VERSION-linux-x86_64"
 cd "$USER_HOME/$ELASTIC_AGENT_DIR"
 
 # Install the Elastic Agent with the specified options
-echo -e "${YELLOW}$SERVICE_NAME_TOKEN${NC}"
-sudo yes | sudo ./elastic-agent install   --url=https://${ELASTIC_HOST}:8220   --fleet-server-es=https://${ELASTIC_HOST}:9200   --fleet-server-service-token=$SERVICE_NAME_TOKEN   --fleet-server-policy=fleet-server-policy   --fleet-server-es-ca=/usr/share/elasticsearch/ssl/ca/ca.crt   --certificate-authorities=/usr/share/elasticsearch/ssl/ca/ca.crt   --fleet-server-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt   --fleet-server-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key   --fleet-server-port=8220   --elastic-agent-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt   --elastic-agent-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key   --fleet-server-es-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt   --fleet-server-es-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key   --fleet-server-es-insecure
-
+echo -e "${GREEN}$SERVICE_NAME_TOKEN${NC}"
+sudo yes | sudo ./elastic-agent install \
+  --url=https://${ELASTIC_HOST}:8220 \
+  --fleet-server-es=https://${ELASTIC_HOST}:9200 \
+  --fleet-server-service-token=$SERVICE_NAME_TOKEN \
+  --fleet-server-policy=fleet-server-policy \
+  --fleet-server-es-ca=/usr/share/elasticsearch/ssl/ca/ca.crt \
+  --certificate-authorities=/usr/share/elasticsearch/ssl/ca/ca.crt \
+  --fleet-server-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt \
+  --fleet-server-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key \
+  --fleet-server-port=8220 \
+  --elastic-agent-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt \
+  --elastic-agent-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key \
+  --fleet-server-es-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt \
+  --fleet-server-es-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key \
+  --fleet-server-es-insecure
+  
 # Confirm installation success
 if [ $? -eq 0 ]; then
   echo -e "
@@ -934,7 +1049,14 @@ echo -e "
 ${GREEN}Sending API request to Kibana Waiting for 10 seconds before creating windows policy...${NC}"
 show_loading_bar 10
 # Send the API request to create the policy and store the response
-windows_policy_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST   --url "https://${ELASTIC_HOST}:5601/api/fleet/agent_policies?sys_monitoring=true"   --header 'Accept: */*'   --header 'Cache-Control: no-cache'   --header 'Connection: keep-alive'   --header 'Content-Type: application/json'   --header 'kbn-xsrf: xxx'   --data '{
+windows_policy_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
+  --url "https://${ELASTIC_HOST}:5601/api/fleet/agent_policies?sys_monitoring=true" \
+  --header 'Accept: */*' \
+  --header 'Cache-Control: no-cache' \
+  --header 'Connection: keep-alive' \
+  --header 'Content-Type: application/json' \
+  --header 'kbn-xsrf: xxx' \
+  --data '{
   "name": "Windows_EDR_and_Host_logs",
   "description": "",
   "namespace": "default",
@@ -946,15 +1068,22 @@ windows_policy_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST   --u
 }' --insecure)
 
 # Extract the "id" value from the response and store it in a variable
-policy_id=$(echo "$windows_policy_info" | grep -o '"id":"[^"]*"' | sed 's/"id":"\([^"]*\)".*//')
+policy_id=$(echo "$windows_policy_info" | grep -o '"id":"[^"]*"' | sed 's/"id":"\([^"]*\)".*/\1/')
 
 # Wait for 10 seconds for Elastic Defend to merge to windows policy
 echo -e "
 ${GREEN}Sending API request to Kibana Waiting for 15 seconds before adding Elastic Defend to windows policy...${NC}"
 show_loading_bar 15
 # Send the next API request using the extracted "id" as the policy_id
-windows_policy_EDR_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST   --url "https://${ELASTIC_HOST}:5601/api/fleet/package_policies"   --header 'Accept: */*'   --header 'Cache-Control: no-cache'   --header 'Connection: keep-alive'   --header 'Content-Type: application/json'   --header 'kbn-xsrf: xxx'   --data '{
-  "name": "EDR",
+windows_policy_EDR_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
+  --url "https://${ELASTIC_HOST}:5601/api/fleet/package_policies" \
+  --header 'Accept: */*' \
+  --header 'Cache-Control: no-cache' \
+  --header 'Connection: keep-alive' \
+  --header 'Content-Type: application/json' \
+  --header 'kbn-xsrf: xxx' \
+  --data '{
+  "name": "Protect",
   "description": "",
   "namespace": "default",
   "policy_id": "'"$policy_id"'",
@@ -1007,12 +1136,9 @@ echo -e "
 ${GREEN}Pulling certs and keys into a variable for API request payload...${NC}
 "
 # Read the CA, certificate, and key contents, properly formatting them for JSON/YAML
-CA_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/ca/ca.crt | sed ':a;N;$!ba;s/
-/\n/g')
-CERT_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt | sed ':a;N;$!ba;s/
-/\n/g')
-KEY_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key | sed ':a;N;$!ba;s/
-/\n/g')
+CA_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/ca/ca.crt | sed ':a;N;$!ba;s/\n/\\n/g')
+CERT_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt | sed ':a;N;$!ba;s/\n/\\n/g')
+KEY_CONTENT=$(awk '{print "    "$0}' /usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key | sed ':a;N;$!ba;s/\n/\\n/g')
 
 # Define the JSON payload with properly formatted YAML
 echo -e "
@@ -1025,7 +1151,7 @@ JSON_PAYLOAD=$(cat <<EOF
   "is_default": true,
   "is_default_monitoring": true,
   "hosts": ["${LOGSTASH_HOST}:5044"],
-  "config_yaml": "ssl:\n  certificate: |\n$CERT_CONTENT\n  certificate_authorities: |\n$CA_CONTENT\n  key: |\n$KEY_CONTENT"
+  "config_yaml": "ssl:\\n  certificate: |\\n$CERT_CONTENT\\n  certificate_authorities: |\\n$CA_CONTENT\\n  key: |\\n$KEY_CONTENT"
 }
 EOF
 )
@@ -1034,7 +1160,12 @@ EOF
 echo -e "
 ${GREEN}Obtaining OAuth2 access token to setup Logstash SSL output for Fleet server...${NC}
 "
-ACCESS_TOKEN_LOGSTASH=$(curl --request POST   --url "https://${ELASTIC_HOST}:9200/_security/oauth2/token"   -u "${USERNAME}:${PASSWORD}"   --header 'Content-Type: application/json'   --insecure   --data '{
+ACCESS_TOKEN_LOGSTASH=$(curl --request POST \
+  --url "https://${ELASTIC_HOST}:9200/_security/oauth2/token" \
+  -u "${USERNAME}:${PASSWORD}" \
+  --header 'Content-Type: application/json' \
+  --insecure \
+  --data '{
     "grant_type": "password",
     "username": "'"${USERNAME}"'",
     "password": "'"${PASSWORD}"'"
@@ -1042,7 +1173,7 @@ ACCESS_TOKEN_LOGSTASH=$(curl --request POST   --url "https://${ELASTIC_HOST}:920
 
 # Display the access token and store it into a new variable
 echo "Access Token: $ACCESS_TOKEN_LOGSTASH"
-api_access_token_logstash=$(echo "$ACCESS_TOKEN_LOGSTASH" | grep -o '"access_token":"[^"]*"' | sed 's/"access_token":"\([^"]*\)".*//')
+api_access_token_logstash=$(echo "$ACCESS_TOKEN_LOGSTASH" | grep -o '"access_token":"[^"]*"' | sed 's/"access_token":"\([^"]*\)".*/\1/')
 
 # Display the access token
 if [ -n "$api_access_token_logstash" ]; then
@@ -1051,13 +1182,20 @@ ${GREEN}Access token obtained successfully: $api_access_token_logstash${NC}
 "
 else
 	echo -e "
-${GREEN}Failed to obtain access token.${NC}
+${RED}Failed to obtain access token.${NC}
 "
 fi
 
 # Send API request
-curl -X 'POST'   --url "https://${ELASTIC_HOST}:5601/api/fleet/outputs"   -H "Authorization: Bearer $api_access_token_logstash"   -H "kbn-xsrf: true"   -H "accept: application/json"   -H "Content-Type: application/json"   --data-binary "$JSON_PAYLOAD"   --insecure
-
+curl -X 'POST' \
+  --url "https://${ELASTIC_HOST}:5601/api/fleet/outputs" \
+  -H "Authorization: Bearer $api_access_token_logstash" \
+  -H "kbn-xsrf: true" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  --data-binary "$JSON_PAYLOAD" \
+  --insecure
+  
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
 echo -e "
@@ -1066,7 +1204,7 @@ ${GREEN}Finished creating Fleet server Logstash output.${NC}
 
 # Enable Kibana logging for debugging
 echo -e "
-${YELLOW}Enabling Kibana logging to /var/log/kibana.log...${NC}
+${GREEN}Enabling Kibana logging to /var/log/kibana.log...${NC}
 "
 
 sudo tee -a /etc/kibana/kibana.yml > /dev/null <<EOL
@@ -1116,12 +1254,17 @@ echo -e "
 ${GREEN}Everything should be good to go. Run top and watch Logstash CPU to ensure it's running low.${NC}
 "
 echo -e "
-${GREEN}If the CPU settles down in 30 seconds, Logstash is running correctly.${NC}
+${GREEN}If the machine CPU settles down in 30 seconds, Logstash is running correctly.${NC}
 "
 echo -e "
-${GREEN}If it tops out CPU over 300%, stop Logstash with:
+${GREEN}If cpu tops out CPU over 300%, stop Logstash with:
  sudo systemctl stop logstash${NC}
 "
+
+# Extract cluster health status using grep and awk (fallback method)
+CLUSTER_STATUS=$(echo "$CLUSTER_RESPONSE" | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+
+echo -e "${GREEN}Elasticsearch cluster health status: ${CLUSTER_STATUS}${NC}"
 
 # Output completion message
 echo -e "${GREEN}Access Kibana at:${NC} ${BLUE}https://${KIBANA_HOST}:5601${NC}
@@ -1129,13 +1272,6 @@ echo -e "${GREEN}Access Kibana at:${NC} ${BLUE}https://${KIBANA_HOST}:5601${NC}
 
 # === Setting file output var for Token Gen Configuration ===
 TOKEN_FILE="./enrollment_tokens.txt"
-
-# === Colors ===
-GREEN='${GREEN}'
-RED='${RED}'
-YELLOW='${YELLOW}'
-CYAN='${CYAN}'
-NC='${NC}'  # No Color
 
 # Token Generation for Adding Additional Elasticsearch Nodes
 echo -e "
