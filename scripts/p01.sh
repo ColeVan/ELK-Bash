@@ -213,7 +213,7 @@ echo -e "${GREEN}Logstash settings tweaked....${NC}"
 # Start Elasticsearch service and report status
 echo -e "${GREEN}Starting Elasticsearch...${NC}"
 sudo systemctl start elasticsearch
-show_loading_bar 5
+sleep 5 & spinner
 echo -e "${GREEN}Checking Elasticsearch status...${NC}"
 sudo systemctl status elasticsearch --no-pager
 
