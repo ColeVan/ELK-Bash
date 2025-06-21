@@ -10,7 +10,7 @@ A set of Bash scripts that automate installation and configuration of the Elasti
 - `service_install_setup.sh` – installs Elasticsearch, Kibana and Logstash at the version provided by `foundation.sh` and creates SSL certificates and basic configurations.
 - `agent_install_fleet_setup.sh` – installs Elastic Agent as a Fleet Server and creates default policies for Windows endpoints. Adds a secure output through Logstash and enables services.
 - `functions.sh` – helper functions shared by the other scripts (validation, spinners, colored output).
-- `orchestrate.sh` – placeholder script that sources other scripts. Additional pieces referenced by this script (`p00.sh`, `p01.sh`, `p02.sh`) are not included.
+- `orchestrate.sh` – placeholder script that sources other scripts. Additional pieces referenced by this script (`foundation.sh`, `service_install_setup.sh`, `agent_install_fleet_setup.sh`) are not included.
 
 ## Usage
 
