@@ -40,7 +40,6 @@ if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
     PREVIOUS_INSTALL=true
     FRESH_INSTALL=false
     echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
-    show_loading_bar 3
 
     # Stop and disable services, then forcefully kill remaining processes if needed
     for svc in elasticsearch logstash kibana; do
@@ -147,7 +146,7 @@ if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
         if [ -e "$path" ]; then
             echo -e "${CYAN}Removing $path...${NC}"
             sudo rm -rf "$path"
-            show_loading_bar 1
+            
         else
             echo -e "${YELLOW}Path not found: $path — skipping.${NC}"
         fi
