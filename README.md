@@ -34,10 +34,8 @@ https://github.com/user-attachments/assets/33e2cdad-5ec9-4ac0-a22b-4b9ad4001186
 **For operational use deploy at your own risk.**
 
 ## 🔥 Overview  
-The script **`deploy_ELK_STACK.sh`** automates the deployment and configuration of the **Elastic Stack** (**Elasticsearch, Kibana, and Logstash**) on a Linux host.
-It supports deploying a single, all-in-one instance, or setting up the initial node for a multi-node Elasticsearch cluster.
-When deploying for a cluster, the script prepares the first node and includes a feature to **generate enrollment tokens** for easily adding subsequent Elasticsearch nodes.
-The "cluster" deployment option now genuinely prepares the current host as the first node of a potential multi-node cluster, rather than just allowing different IPs for services on the same host.
+The original monolithic **`deploy_ELK_STACK.sh`** script has been broken into smaller pieces for easier maintenance. Deployment is now handled by `scripts/orchestrate.sh`, which sources the individual parts (`p00.sh`, `p01.sh`, and `p02.sh`) along with a shared `functions.sh` file.
+This orchestrator performs the same tasks: it can deploy a single, all-in-one instance or prepare the first node of a multi-node Elasticsearch cluster. When a cluster is chosen, the script generates enrollment tokens so additional nodes can join easily. The "cluster" option truly configures the current host as the initial node rather than just using separate IPs for services.
 
 ## 🖥️ System Requirements
 To ensure a smooth deployment, the following minimum VM specifications are **recommended**. The script does not enforce these, but performance may suffer on lesser systems.
@@ -171,10 +169,10 @@ To ensure a smooth deployment, the following minimum VM specifications are **rec
 ---
 # 🔗 Elasticsearch Cluster Setup
 
-## Step 1: Preparing the First Node & Generating Enrollment Tokens (with `deploy_ELK_STACK.sh`)
-This section applies if you selected the "cluster" deployment type when running `deploy_ELK_STACK.sh`. This script prepares the current node as the first node of your Elasticsearch cluster and helps generate enrollment tokens for additional nodes.
+## Step 1: Preparing the First Node & Generating Enrollment Tokens (with `scripts/orchestrate.sh`)
+This section applies if you selected the "cluster" deployment type when running `scripts/orchestrate.sh`. The orchestrator prepares the current node as the first node of your Elasticsearch cluster and helps generate enrollment tokens for additional nodes.
 
-After `deploy_ELK_STACK.sh` completes the main installation and configuration of the first node, it will:
+After `scripts/orchestrate.sh` completes the main installation and configuration of the first node, it will:
 1.  **Prompt for Token Generation:** Ask if you want to generate enrollment tokens for the additional Elasticsearch nodes you specified earlier (via the `NODE_COUNT` variable, which is your input + 1 for the current node).
 2.  **Token Generation Loop:** If you confirm:
     *   It will loop from the second node up to `NODE_COUNT`.
@@ -182,7 +180,7 @@ After `deploy_ELK_STACK.sh` completes the main installation and configuration of
         ```bash
         sudo /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node
         ```
-    *   The output (the token) is appended to a file named `enrollment_tokens.txt` in the current directory where `deploy_ELK_STACK.sh` was run.
+    *   The output (the token) is appended to a file named `enrollment_tokens.txt` in the current directory where `scripts/orchestrate.sh` was run.
 3.  **Token File (`enrollment_tokens.txt`):** This file will store the tokens. It might look something like this:
     ```
     Node 2:
@@ -192,30 +190,30 @@ After `deploy_ELK_STACK.sh` completes the main installation and configuration of
     eyJ2ZXIiOiI4LjE0LjMiLCJhZHIiOlsiMTkyLjE2OC4xLjEwOjkyMDAiXSwiZmdyIjoiNzRkYzYx...IiwiZWsiOiJNVFkyTXprek5UVTBOekkxTmcwPSJ9Cg==
     ```
     (Note: The tokens above are examples and will be much longer.)
-4.  **Manual Token Generation:** If token generation is skipped or fails, `deploy_ELK_STACK.sh` reminds you that you can manually generate a token for a new node using:
+4.  **Manual Token Generation:** If token generation is skipped or fails, `scripts/orchestrate.sh` reminds you that you can manually generate a token for a new node using:
     ```bash
     sudo /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node
     ```
-    You would run this on the existing, already-configured Elasticsearch node (the one set up by `deploy_ELK_STACK.sh`) when you are ready to add a new node to the cluster.
+    You would run this on the existing, already-configured Elasticsearch node (the one set up by `scripts/orchestrate.sh`) when you are ready to add a new node to the cluster.
 
 Use these tokens when setting up new Elasticsearch nodes to securely join them to this cluster. Each token is for a single new node.
 
 ## Step 2: Adding Additional Elasticsearch Nodes with `deploy_elasticsearch_node.sh`
-The `deploy_elasticsearch_node.sh` script is used to deploy and configure new Elasticsearch nodes that will join the cluster initiated by `deploy_ELK_STACK.sh`.
+The `deploy_elasticsearch_node.sh` script is used to deploy and configure new Elasticsearch nodes that will join the cluster initiated by `scripts/orchestrate.sh`.
 
 **Important:**
 *   Run `deploy_elasticsearch_node.sh` on **new, separate VMs or hosts** intended to be additional Elasticsearch data or master-eligible nodes.
-*   **Do NOT run this script on the initial node** where `deploy_ELK_STACK.sh` was executed.
+*   **Do NOT run this script on the initial node** where `scripts/orchestrate.sh` was executed.
 
 When you run `sudo ./deploy_elasticsearch_node.sh`, you will be prompted for the following information:
 *   **Confirmation to proceed:** Asks if you want to deploy an Elasticsearch-only node.
 *   **IP address for this new Elasticsearch node:** The IP that this new node will use.
 *   **Unique node name for this new node:** For example, `node-2`, `elasticsearch-data-01`.
 *   **Elastic Stack version:** This should match the version used for the initial node/cluster (e.g., `8.14.3`).
-*   **IP address of the first Elasticsearch node:** The IP of the node where `deploy_ELK_STACK.sh` was run.
-*   **Superuser username:** The Elasticsearch superuser username created by `deploy_ELK_STACK.sh` on the first node.
+*   **IP address of the first Elasticsearch node:** The IP of the node where `scripts/orchestrate.sh` was run.
+*   **Superuser username:** The Elasticsearch superuser username created by `scripts/orchestrate.sh` on the first node.
 *   **Superuser password:** The password for the Elasticsearch superuser on the first node.
-*   **Enrollment Token:** One of the tokens from `enrollment_tokens.txt` (generated by `deploy_ELK_STACK.sh`) or one you generated manually on the first node.
+*   **Enrollment Token:** One of the tokens from `enrollment_tokens.txt` (generated by `scripts/orchestrate.sh`) or one you generated manually on the first node.
 
 **Actions performed by `deploy_elasticsearch_node.sh`:**
 1.  Installs necessary prerequisites (`curl`, `apt-transport-https`, `unzip`, `pv`).
@@ -246,15 +244,16 @@ To use the ELK Stack deployment script, follow these steps:
 
 2.  **Make the scripts executable:**
     ```bash
-    chmod +x deploy_ELK_STACK.sh
     chmod +x deploy_elasticsearch_node.sh
+    # Make the modular deployment scripts executable
+    chmod +x scripts/*.sh
     ```
 
 3.  **Run the scripts:**
-    *   **For the first/primary node (hosting ELK stack or just Elasticsearch master/data node):**
-        The `deploy_ELK_STACK.sh` script requires `sudo` privileges to install packages, configure services, manage system files, and run binaries from `/usr/share/elasticsearch/bin/`.
+    *   **For the first/primary node (hosting ELK stack or just an Elasticsearch master/data node):**
+        Use the orchestration script located in `scripts/`. It requires `sudo` privileges to install packages and configure services.
         ```bash
-        sudo ./deploy_ELK_STACK.sh
+        sudo ./scripts/orchestrate.sh
         ```
     *   **For adding additional Elasticsearch nodes to the cluster:**
         The `deploy_elasticsearch_node.sh` script also requires `sudo` privileges. Run this on each new VM/host you want to add.
@@ -262,7 +261,7 @@ To use the ELK Stack deployment script, follow these steps:
         sudo ./deploy_elasticsearch_node.sh
         ```
 
-4.  **Follow the prompts (for `deploy_ELK_STACK.sh`):**
+4.  **Follow the prompts (for `scripts/orchestrate.sh`):**
     Upon execution, the script will guide you through the setup process:
     *   **Deployment Type:** Choose between `single` (all services use one IP) or `cluster` (prepares the current node for a multi-node Elasticsearch cluster).
         *   If `cluster` is chosen, you'll be asked for:
@@ -284,13 +283,13 @@ To use the ELK Stack deployment script, follow these steps:
 This section covers common issues you might encounter during or after deployment and how to resolve them.
 
 1.  **Script Execution Errors:**
-    *   **Permission Denied:** If you see an error like `bash: ./deploy_ELK_STACK.sh: Permission denied`, ensure you've made the script executable:
+    *   **Permission Denied:** If you see an error like `bash: ./scripts/orchestrate.sh: Permission denied`, ensure you've made the script executable:
         ```bash
-        chmod +x deploy_ELK_STACK.sh
+        chmod +x scripts/orchestrate.sh
         ```
         And that you are running it with `sudo`:
         ```bash
-        sudo ./deploy_ELK_STACK.sh
+        sudo ./scripts/orchestrate.sh
         ```
     *   **Command Not Found (e.g., `curl`, `pv`, `unzip`, `openssl`):** The script attempts to install `curl`, `apt-transport-https`, `unzip`, and `pv`. If `openssl` (used by the script for Logstash key conversion) or another critical command is missing, it might indicate a very minimal OS installation or a `PATH` issue. Try installing them manually:
         ```bash
@@ -346,13 +345,13 @@ This section covers common issues you might encounter during or after deployment
         *   Elasticsearch and Logstash logs often indicate resource exhaustion.
 
 7.  **Cluster Enrollment Issues:**
-    *   **Token generation failed (on the first node running `deploy_ELK_STACK.sh`):**
-        *   Check Elasticsearch logs (`sudo journalctl -u elasticsearch` or files in `/var/log/elasticsearch/`) on the primary node immediately after `deploy_ELK_STACK.sh` attempts token generation.
+    *   **Token generation failed (on the first node running `scripts/orchestrate.sh`):**
+        *   Check Elasticsearch logs (`sudo journalctl -u elasticsearch` or files in `/var/log/elasticsearch/`) on the primary node immediately after `scripts/orchestrate.sh` attempts token generation.
         *   Ensure the `/usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token` script has execute permissions and that there are no underlying Elasticsearch issues preventing token creation (e.g., cluster health red, insufficient master nodes if it was already part of a degraded cluster).
     *   **Nodes not joining cluster (when running `deploy_elasticsearch_node.sh` on a new node):**
-        *   **Network Connectivity:** Verify that new nodes can reach the primary node (first node set up by `deploy_ELK_STACK.sh`) on its `transport.host` IP (e.g., `${ELASTIC_HOST}` as configured on the first node) and port `9300` (default Elasticsearch transport port). Also, ensure new nodes can reach the primary node on its Elasticsearch HTTP port (`9200`) as this is often part of the enrollment token verification.
+        *   **Network Connectivity:** Verify that new nodes can reach the primary node (first node set up by `scripts/orchestrate.sh`) on its `transport.host` IP (e.g., `${ELASTIC_HOST}` as configured on the first node) and port `9300` (default Elasticsearch transport port). Also, ensure new nodes can reach the primary node on its Elasticsearch HTTP port (`9200`) as this is often part of the enrollment token verification.
         *   **Firewall:** Check firewalls (`ufw`, `firewalld`, cloud security groups) on all nodes (primary and new). Ports `9200` (for initial communication/token use) and `9300` (for ongoing cluster communication) must be open between cluster members.
-        *   **`transport.host` Configuration:** `deploy_ELK_STACK.sh` sets `transport.host` on the first node. The `deploy_elasticsearch_node.sh` script does not explicitly set `transport.host` in the `elasticsearch.yml` for new nodes, as the enrollment process typically handles necessary network binding. However, if issues persist, ensure `network.host` in `/etc/elasticsearch/elasticsearch.yml` on the new node is set to an IP reachable by other cluster members, or that `transport.host` is explicitly configured if needed.
+        *   **`transport.host` Configuration:** `scripts/orchestrate.sh` sets `transport.host` on the first node. The `deploy_elasticsearch_node.sh` script does not explicitly set `transport.host` in the `elasticsearch.yml` for new nodes, as the enrollment process typically handles necessary network binding. However, if issues persist, ensure `network.host` in `/etc/elasticsearch/elasticsearch.yml` on the new node is set to an IP reachable by other cluster members, or that `transport.host` is explicitly configured if needed.
         *   **Correct Token Usage with `deploy_elasticsearch_node.sh`:** Double-check that the exact enrollment token (from `enrollment_tokens.txt` or manually generated on the first node) is correctly pasted when prompted by `deploy_elasticsearch_node.sh`. Each token is for enrolling one new node only. If a token was accidentally used or failed, generate a new one on the first node.
         *   **Elasticsearch Logs on New Node:** Check the Elasticsearch logs on the new node (the one running `deploy_elasticsearch_node.sh`) for errors related to discovery, joining, or token application (e.g., "failed to join cluster," "master not discovered," "enrollment token is invalid").
         *   **Elasticsearch Logs on First Node:** Also check logs on the first node for any messages related to a new node attempting to join (or failing to join).
