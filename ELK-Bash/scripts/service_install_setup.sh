@@ -33,25 +33,9 @@ sudo apt-get install -y "elasticsearch=$ELASTIC_VERSION" > /dev/null 2>&1
 sleep 2 & spinner "Installing Elasticsearch version $ELASTIC_VERSION"
 echo -e "${GREEN}✔ Elasticsearch installation completed successfully.${NC}"
 
-# Configure Elasticsearch
-echo -e "${BLUE}Configuring Elasticsearch...${NC}"
-sudo tee /etc/elasticsearch/elasticsearch.yml > /dev/null <<EOL
-network.host: ${ELASTIC_HOST}
-http.port: 9200
-node.name: ${NODE_NAME}
-path.data: /var/lib/elasticsearch
-path.logs: /var/log/elasticsearch
-xpack.security.enrollment.enabled: true
-xpack.security.http.ssl.enabled: true
-xpack.security.http.ssl.keystore.path: certs/http.p12
-xpack.security.transport.ssl.enabled: true
-xpack.security.transport.ssl.verification_mode: certificate
-xpack.security.transport.ssl.keystore.path: certs/transport.p12
-xpack.security.transport.ssl.truststore.path: certs/transport.p12
-cluster.initial_master_nodes: ["${NODE_NAME}"]
-transport.host: ${ELASTIC_HOST}
-EOL
-
+# Elasticsearch
+apply_template "elk_templates/elasticsearch.yml.tpl" "/etc/elasticsearch/elasticsearch.yml"
+sanitize_line_endings "/etc/elasticsearch/elasticsearch.yml"
 sleep 2 & spinner
 echo -e "${GREEN}✔ Elasticsearch configuration completed successfully.${NC}"
 
@@ -62,26 +46,6 @@ sudo apt-get install -y "kibana=$ELASTIC_VERSION" > /dev/null 2>&1
 sleep 2 & spinner "Installing Kibana version $ELASTIC_VERSION"
 echo -e "${GREEN}✔ Kibana installation completed successfully.${NC}"
 
-# Configure Kibana
-echo -e "${BLUE}Configuring Kibana...${NC}"
-sudo tee /etc/kibana/kibana.yml > /dev/null <<EOL
-server.port: 5601
-server.host: ${KIBANA_HOST}
-elasticsearch.hosts: ["https://${ELASTIC_HOST}:9200"]
-elasticsearch.ssl.certificateAuthorities: ["/etc/kibana/certs/http_ca.crt"]
-server.ssl.enabled: true
-server.ssl.certificate: "/etc/kibana/certs/kibana.crt"
-server.ssl.key: "/etc/kibana/certs/kibana.key"
-pid.file: /run/kibana/kibana.pid
-elasticsearch.username: "kibana"
-elasticsearch.password: "<kibana_password>"
-xpack.security.encryptionKey: "something_at_least_32_characters"
-xpack.encryptedSavedObjects.encryptionKey: "something_at_least_32_characters"
-EOL
-
-sleep 2 & spinner
-echo -e "${GREEN}✔ Kibana configuration completed successfully.${NC}"
-
 # Install Logstash
 sudo apt-get update > /dev/null 2>&1
 sleep 2 & spinner "Updating package lists"
@@ -90,25 +54,11 @@ sleep 2 & spinner "Installing Logstash"
 
 echo -e "${GREEN}🚀 All components installed and configured successfully! 🎉${NC}"
 
-# Configure logstash
-echo -e "${BLUE}Configuring Logstash yml file.${NC}"
-sudo tee /etc/logstash/logstash.yml > /dev/null <<EOL
-queue.type: persisted
-path.queue: /var/lib/logstash/data
-dead_letter_queue.enable: false
-# Elastic Output
-node.name: ${NODE_NAME}
-#path.config: /etc/logstash/conf.d/*.conf
-xpack.monitoring.enabled: true
-xpack.monitoring.elasticsearch.username: "logstash_system"
-xpack.monitoring.elasticsearch.password: "<logstash_password>"
-xpack.monitoring.elasticsearch.hosts: ["https://${ELASTIC_HOST}:9200"]
-xpack.monitoring.elasticsearch.ssl.certificate_authority: "/etc/logstash/certs/http_ca.crt"
-xpack.management.elasticsearch.ssl.verification_mode: certificate
-# log.level: info
-path.logs: /var/log/logstash
-EOL
+# Logstash YAML
+apply_template "elk_templates/logstash.yml.tpl" "/etc/logstash/logstash.yml"
+sanitize_line_endings "/etc/logstash/logstash.yml"
 sleep 2
+
 echo -e "${GREEN}Updating logstash pipeline.yml.${NC}"
 # Open the pipelines.yml file and add the pipeline configuration for Elastic Agent
 sudo tee -a /etc/logstash/pipelines.yml > /dev/null <<EOL
@@ -215,53 +165,30 @@ echo -e "${GREEN}Starting Elasticsearch...${NC}"
 sudo systemctl start elasticsearch
 sleep 5 & spinner
 echo -e "${GREEN}Checking Elasticsearch status...${NC}"
-sudo systemctl status elasticsearch --no-pager
-
-# Reset Logstash password and store it in a variable
-echo -e "${GREEN}Resetting Logstash password...${NC}"
-sleep 5 & spinner 
-logstash_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u logstash_system -s -b)
-
-# Update logstash configuration with the new password
-sudo sed -i "s/<logstash_password>/$logstash_password/" /etc/logstash/logstash.yml
+check_service elasticsearch
 
 # Create the superuser
 echo -e "${GREEN}Creating a superuser...${NC}"
 if sudo /usr/share/elasticsearch/bin/elasticsearch-users useradd "$USERNAME" -p "$PASSWORD" -r superuser > /dev/null 2>&1; then
-  echo -e "${GREEN}Superuser $USERNAME created successfully.{NC}"
+  echo -e "${GREEN}Superuser $USERNAME created successfully.${NC}"
 else
   echo -e "${RED}Failed to create superuser $USERNAME. Check logs for details.${NC}"
   exit 1
 fi
 
 # Reset Kibana password and store it in a variable
-echo -e "${GREEN}Resetting Kibana password and saving to variable{NC}"
+echo -e "${GREEN}Resetting Kibana password and saving to variable.${NC}"
 sleep 5 & spinner
 kibana_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u kibana -s -b)
 
 echo -e "${GREEN}Kibana password successfully reset in $elapsed_time seconds.${NC}"
 
-# Configure Kibana
-echo -e "${GREEN}Configuring Kibana yaml...{NC}"
-sudo tee /etc/kibana/kibana.yml > /dev/null <<EOL
-# Kibana configuration
-# =================== System: Logging ===================
-server.port: 5601
-server.host: ${KIBANA_HOST}
-elasticsearch.hosts: ["https://${ELASTIC_HOST}:9200"]
-elasticsearch.ssl.certificateAuthorities: ["/etc/kibana/certs/http_ca.crt"]
-server.ssl.enabled: true
-server.ssl.certificate: "/etc/kibana/certs/kibana.crt"
-server.ssl.key: "/etc/kibana/certs/kibana.key"
-# Specifies the path where Kibana creates the process ID file.
-pid.file: /run/kibana/kibana.pid
-# X-Pack Security
-elasticsearch.username: "kibana"
-elasticsearch.password: "${kibana_password}"
-xpack.security.encryptionKey: "something_at_least_32_characters"
-xpack.encryptedSavedObjects.encryptionKey: "something_at_least_32_characters"
-EOL
-sleep 5 & spinner
+echo -e "${BLUE}Configuring Kibana...${NC}"
+# Kibana
+apply_template "elk_templates/kibana.yml.tpl" "/etc/kibana/kibana.yml"
+sanitize_line_endings "/etc/kibana/kibana.yml"
+sudo chown -R kibana: /etc/kibana > /dev/null 2>&1
+sleep 2 & spinner
 
 echo -e "${GREEN}Kibana yml file successfully configured.${NC}"
 # Start Kibana service and report status
@@ -269,7 +196,7 @@ echo -e "${GREEN}Starting Kibana...${NC}"
 sudo systemctl start kibana
 sleep 15 & spinner
 echo -e "${GREEN}Checking Kibana status...${NC}"
-sudo systemctl status kibana --no-pager
+check_service kibana
 
 echo -e "${GREEN}Creating Logstash directories for critical functions.${NC}"
 sudo mkdir -p /opt/logstash_tmp
@@ -341,9 +268,7 @@ fi
 
 echo -e "${GREEN}Creating Access Token for follow on system critical functions.${NC}"
 # Wait for 15 seconds for packages to settle
-echo -e "
-${GREEN}Sending API request to Elasticsearch Waiting for 15 seconds while adding correct API key to logstash pipline...${NC}
-"
+echo -e "${GREEN}Sending API request to Elasticsearch Waiting for 15 seconds while adding correct API key to logstash pipline...${NC}"
 sleep 15 & spinner
 logstash_api_key=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
   --url "https://${ELASTIC_HOST}:9200/_security/api_key" \
@@ -393,31 +318,13 @@ echo $logstash_pipeline_api_key
 decoded_value=$(echo -n $logstash_pipeline_api_key| base64 -d)
 echo "$decoded_value"
 
-# Configure logstash
-echo -e "${GREEN}Configuring Logstash Conf with decoded API key for Elastic Agent communication over port 5044 using SSL certs...${NC}"
 # Modify or create the Logstash input and output configuration
-sudo tee /etc/logstash/conf.d/logstash.conf > /dev/null <<EOL
-input {
-  elastic_agent {
-    port => 5044
-    ssl_enabled => true
-    ssl_certificate_authorities => ["/etc/logstash/certs/ca.crt"]
-    ssl_certificate => "/etc/logstash/certs/logstash.crt"
-    ssl_key => "/etc/logstash/certs/logstash.pkcs8.key"
-    ssl_client_authentication => "required"
-  }
-}
-output {
-  elasticsearch {
-    hosts => ["https://${ELASTIC_HOST}:9200"]
-    api_key => "$decoded_value"
-    data_stream => true
-    ssl_enabled => true
-    ssl_certificate_authorities => '/etc/logstash/certs/http_ca.crt'
-  }
-}
-EOL
-echo -e "${GREEN}Configuring Logstash Conf configured with input and output settings...${NC}"
+echo -e "${BLUE}Writing Logstash Pipeline Config...${NC}"
+# Logstash Pipeline
+apply_template "elk_templates/logstash.conf.tpl" "/etc/logstash/conf.d/logstash.conf"
+sanitize_line_endings "/etc/logstash/conf.d/logstash.conf"
+sudo chown -R logstash: /etc/logstash > /dev/null 2>&1
+echo -e "${GREEN}Configuring Logstash Conf with input and output settings...${NC}"
 sleep 15 & spinner
 
 echo -e "${GREEN}Setting variable paths and creating service token ...${NC}"
@@ -453,13 +360,12 @@ sleep 10 & spinner
 echo -e "${GREEN}Restarting Elasticsearch service to take new token creation...${NC}"
 sudo systemctl restart elasticsearch
 echo "Checking Elasticsearch status..."
-sudo systemctl status elasticsearch --no-pager
+check_service elasticsearch
 sleep 10 & spinner
 
 #Starting Kibana and checking status
 echo -e "${GREEN}Checking Kibana status...${NC}"
-sudo systemctl status kibana --no-pager
+check_service kibana
 sleep 5 & spinner
 echo -e "${YELLOW}The installation hasn't failed yet... Things look good so far, continuing forward....${NC}"
 sleep 5 & spinner
-

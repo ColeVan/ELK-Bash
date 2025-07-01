@@ -1,0 +1,11 @@
+queue.type: persisted
+path.queue: /var/lib/logstash/data
+dead_letter_queue.enable: false
+node.name: ${NODE_NAME}
+xpack.monitoring.enabled: true
+xpack.monitoring.elasticsearch.username: "logstash_system"
+xpack.monitoring.elasticsearch.password: "<logstash_password>"
+xpack.monitoring.elasticsearch.hosts: ["https://${ELASTIC_HOST}:9200"]
+xpack.monitoring.elasticsearch.ssl.certificate_authority: "/etc/logstash/certs/http_ca.crt"
+xpack.management.elasticsearch.ssl.verification_mode: certificate
+path.logs: /var/log/logstash

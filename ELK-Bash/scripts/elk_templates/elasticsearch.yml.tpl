@@ -1,0 +1,14 @@
+network.host: ${ELASTIC_HOST}
+http.port: 9200
+node.name: ${NODE_NAME}
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+xpack.security.enrollment.enabled: true
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: certs/http.p12
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: certs/transport.p12
+xpack.security.transport.ssl.truststore.path: certs/transport.p12
+cluster.initial_master_nodes: ["${NODE_NAME}"]
+transport.host: ${ELASTIC_HOST}

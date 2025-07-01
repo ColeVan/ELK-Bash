@@ -129,6 +129,7 @@ fi
 echo -e "
 ${GREEN}Sending API request to Kibana Waiting for 10 seconds before creating windows policy...${NC}"
 sleep 10 & spinner
+
 # Send the API request to create the policy and store the response
 windows_policy_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
   --url "https://${ELASTIC_HOST}:5601/api/fleet/agent_policies?sys_monitoring=true" \
@@ -161,36 +162,37 @@ windows_policy_EDR_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
   --header 'Cache-Control: no-cache' \
   --header 'Connection: keep-alive' \
   --header 'Content-Type: application/json' \
+  --header "kbn-version: ${ELASTIC_VERSION}" \
   --header 'kbn-xsrf: xxx' \
   --data '{
-  "name": "Protect",
-  "description": "",
-  "namespace": "default",
-  "policy_id": "'"$policy_id"'",
-  "enabled": true,
-  "inputs": [
-    {
-      "enabled": true,
-      "streams": [],
-      "type": "ENDPOINT_INTEGRATION_CONFIG",
-      "config": {
-        "_config": {
-          "value": {
-            "type": "endpoint",
-            "endpointConfig": {
-              "preset": "EDRComplete"
+    "name": "Protect",
+    "description": "",
+    "namespace": "default",
+    "policy_id": "'"${policy_id}"'",
+    "enabled": true,
+    "inputs": [
+      {
+        "enabled": true,
+        "streams": [],
+        "type": "ENDPOINT_INTEGRATION_CONFIG",
+        "config": {
+          "_config": {
+            "value": {
+              "type": "endpoint",
+              "endpointConfig": {
+                "preset": "EDRComplete"
+              }
             }
           }
         }
       }
+    ],
+    "package": {
+      "name": "endpoint",
+      "title": "Elastic Defend",
+      "version": "'"${ELASTIC_VERSION}"'"
     }
-  ],
-  "package": {
-    "name": "endpoint",
-    "title": "Elastic Defend",
-    "version": "$ELASTIC_VERSION"
-  }
-}' --insecure)
+  }' --insecure)
 
 # Output the response from the second request
 echo -e "${GREEN}$windows_policy_EDR_info..${NC}"
@@ -201,11 +203,20 @@ if [ -z "$policy_id" ]; then
   exit 1
 fi
 
+# Reset Logstash password and store it in a variable
+echo -e "${GREEN}Resetting Logstash password...${NC}"
+sleep 5 & spinner 
+logstash_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u logstash_system -s -b)
+
+# Update logstash configuration with the new password
+sudo sed -i "s/<logstash_password>/$logstash_password/" /etc/logstash/logstash.yml
+sleep 5 & spinner
+
 # Start Logstash services
 echo -e "${GREEN}Starting logstash services....${NC}"
 sudo systemctl start logstash
 echo -e "${GREEN}Checking logstash status..${NC}"
-sudo systemctl status logstash --no-pager
+check_service logstash
 
 echo -e "${GREEN}Pulling certs and keys into a variable for API request payload...${NC}"
 # Read the CA, certificate, and key contents, properly formatting them for JSON/YAML
@@ -277,7 +288,7 @@ logging:
   appenders:
     file:
       type: file
-      fileName: /var/log/kibana.log
+      fileName: /var/log/kibana/kibana.log
       layout:
         type: json
   root:
@@ -287,13 +298,14 @@ EOL
 echo -e "${GREEN}Logging enabled. Check logs at /var/log/kibana.log${NC}"
 
 # Ensure /var/log/kibana.log is writable
-sudo touch /var/log/kibana.log
-sudo chown kibana:kibana /var/log/kibana.log
-sudo chmod 644 /var/log/kibana.log
+sudo touch /var/log/kibana/kibana.log
+sudo chown kibana:kibana /var/log/kibana/kibana.log
+sudo chmod 644 /var/log/kibana/kibana.log
 
 # Restart Kibana to apply changes
-echo -e "${YELLOW}Restarting Kibana to apply changes...${NC}"
+echo -e "${YELLOW}Restarting Kibana to apply changes for logging.${NC}"
 sudo systemctl restart kibana
+check_service kibana
 sleep 10 & spinner
 
 echo -e "${GREEN}Enabling Elasticsearch, Logstash, and Kibana for persistent start upon reboot.${NC}"
@@ -306,14 +318,17 @@ echo -e "${GREEN}Kibana Enabled.${NC}"
 
 echo -e "${GREEN}Everything should be good to go. Run top and watch Logstash CPU to ensure it's running low.${NC}"
 echo -e "${GREEN}If the machine CPU settles down in 30 seconds, Logstash is running correctly.${NC}"
-echo -e "${GREEN}If cpu tops out CPU over 300%, stop Logstash with: sudo systemctl stop logstash${NC}"
+echo -e "${GREEN}If cpu tops out over 300%, stop Logstash with: sudo systemctl stop logstash${NC}"
 
 # Extract cluster health status using grep and awk (fallback method)
+CLUSTER_RESPONSE=$(curl -s -k -u $USERNAME:$PASSWORD https://$ELASTIC_HOST:9200/_cluster/health)
 CLUSTER_STATUS=$(echo "$CLUSTER_RESPONSE" | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
-echo -e "${GREEN}Elasticsearch cluster health status: ${CLUSTER_STATUS}${NC}"
+echo -e "${GREEN}Elasticsearch cluster health status: ${YELLOW}${CLUSTER_STATUS}!!!${NC}"
+add_to_summary_table "Cluster Status" "$CLUSTER_STATUS"
 
 # Output completion message
 echo -e "${GREEN}Access Kibana at:${NC} ${BLUE}https://${KIBANA_HOST}:5601${NC}"
+add_to_summary_table "Kibana WebUI IP" "https://${KIBANA_HOST}:5601"
 
 # === Setting file output var for Token Gen Configuration ===
 TOKEN_FILE="./enrollment_tokens.txt"
@@ -355,14 +370,20 @@ if [[ "$DEPLOYMENT_TYPE" == "cluster" ]]; then
     fi
 fi
 
+# Final table
+echo -e "\n${GREEN}Summary of your configuration:${NC}"
+print_summary_table
+
+echo -e "${GREEN}"
 cat << 'EOF'
-
- ░▒▓████████▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░ ░▒▓██████▓▒░ ░▒▓███████▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓██████▓▒░ ░▒▓█▓▒░      ░▒▓███████▓▒░       ░▒▓███████▓▒░░▒▓████████▓▒░░▒▓██████▓▒░░▒▓████████▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓████████▓▒░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░
-
+▓█████  ██▓     ██ ▄█▀    ▄▄▄▄    ▄▄▄        ██████  ██░ ██ 
+▓█   ▀ ▓██▒     ██▄█▒    ▓█████▄ ▒████▄    ▒██    ▒ ▓██░ ██▒
+▒███   ▒██░    ▓███▄░    ▒██▒ ▄██▒██  ▀█▄  ░ ▓██▄   ▒██▀▀██░
+▒▓█  ▄ ▒██░    ▓██ █▄    ▒██░█▀  ░██▄▄▄▄██   ▒   ██▒░▓█ ░██ 
+░▒████▒░██████▒▒██▒ █▄   ░▓█  ▀█▓ ▓█   ▓██▒▒██████▒▒░▓█▒░██▓
+░░ ▒░ ░░ ▒░▓  ░▒ ▒▒ ▓▒   ░▒▓███▀▒ ▒▒   ▓▒█░▒ ▒▓▒ ▒ ░ ▒ ░░▒░▒
+ ░ ░  ░░ ░ ▒  ░░ ░▒ ▒░   ▒░▒   ░   ▒   ▒▒ ░░ ░▒  ░ ░ ▒ ░▒░ ░
+   ░     ░ ░   ░ ░░ ░     ░    ░   ░   ▒   ░  ░  ░   ░  ░░ ░
+   ░  ░    ░  ░░  ░       ░            ░  ░      ░   ░  ░  ░                         
 EOF
+echo -e "${NC}"

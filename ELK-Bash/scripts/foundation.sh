@@ -1,19 +1,7 @@
 #!/bin/bash
-
+clear
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/functions.sh"
-
-cat << 'EOF'
-
- ░▒▓████████▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░ ░▒▓██████▓▒░ ░▒▓███████▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓██████▓▒░ ░▒▓█▓▒░      ░▒▓███████▓▒░       ░▒▓███████▓▒░░▒▓████████▓▒░░▒▓██████▓▒░░▒▓████████▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░
- ░▒▓████████▓▒░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░
-
-EOF
 
 # Define color codes (ANSI escape codes)
 RED='\033[0;31m'
@@ -23,6 +11,21 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+
+echo -e "${GREEN}"
+cat << 'EOF'
+▓█████  ██▓     ██ ▄█▀    ▄▄▄▄    ▄▄▄        ██████  ██░ ██ 
+▓█   ▀ ▓██▒     ██▄█▒    ▓█████▄ ▒████▄    ▒██    ▒ ▓██░ ██▒
+▒███   ▒██░    ▓███▄░    ▒██▒ ▄██▒██  ▀█▄  ░ ▓██▄   ▒██▀▀██░
+▒▓█  ▄ ▒██░    ▓██ █▄    ▒██░█▀  ░██▄▄▄▄██   ▒   ██▒░▓█ ░██ 
+░▒████▒░██████▒▒██▒ █▄   ░▓█  ▀█▓ ▓█   ▓██▒▒██████▒▒░▓█▒░██▓
+░░ ▒░ ░░ ▒░▓  ░▒ ▒▒ ▓▒   ░▒▓███▀▒ ▒▒   ▓▒█░▒ ▒▓▒ ▒ ░ ▒ ░░▒░▒
+ ░ ░  ░░ ░ ▒  ░░ ░▒ ▒░   ▒░▒   ░   ▒   ▒▒ ░░ ░▒  ░ ░ ▒ ░▒░ ░
+   ░     ░ ░   ░ ░░ ░     ░    ░   ░   ▒   ░  ░  ░   ░  ░░ ░
+   ░  ░    ░  ░░  ░       ░            ░  ░      ░   ░  ░  ░                         
+EOF
+echo -e "${NC}"
+
 # Check for sudo usage
 if [[ "$EUID" -eq 0 && -z "$SUDO_USER" ]]; then
     echo -e "${RED}❌ Please run this script using sudo, not as the root user directly (e.g., use: sudo ./script.sh).${NC}"
@@ -31,10 +34,32 @@ fi
 
 echo -e "${GREEN}✔ Running with sudo as expected.${NC}"
 
+echo -e "${GREEN}Is this the first node to be set up, or will this node join an existing cluster?${NC}"
+echo -e "${YELLOW}1) This is a new node.${NC}"
+echo -e "${YELLOW}2) Joining an existing cluster.${NC}"
+
+read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
+
+case "$NODE_OPTION" in
+    1)
+        echo -e "${GREEN}✔ Proceeding with setting up a new node...${NC}"
+        ;;
+	2)
+		echo -e "${GREEN}➡ This node will join an existing cluster.${NC}"
+
+		set -e
+		SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+		source "$SCRIPT_DIR/deploy_elasticsearch_node.sh"
+		exit 0
+		;;
+esac
+
 
 # --- Prompt for ELK install history ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
-read -p "$(echo -e ${YELLOW}Type \"yes\" if there is a previous installation on this machine, or \"no\" to continue with a fresh install: ${NC})" INSTALL_RESPONSE
+# Prompt the user
+prompt_input "Type \"${YELLOW}yes${GREEN}\" if there is a previous installation on this machine, or \"${YELLOW}no${GREEN}\" to continue with a fresh install: " INSTALL_RESPONSE
 
 if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
     PREVIOUS_INSTALL=true
@@ -163,34 +188,50 @@ else
     exit 1
 fi
 
-# === Deployment Type Selection ===
-while true; do
-    read -p "$(echo -e "${GREEN}Is this a single ELK stack deployment or a cluster deployment? (single/cluster): ${NC}")" DEPLOYMENT_TYPE
-    DEPLOYMENT_TYPE=$(echo "$DEPLOYMENT_TYPE" | tr '[:upper:]' '[:lower:]')
+# Lowercase & trim just in case
+INSTALL_RESPONSE="$(echo "$INSTALL_RESPONSE" | tr '[:upper:]' '[:lower:]' | xargs)"
 
-    if [[ "$DEPLOYMENT_TYPE" == "single" || "$DEPLOYMENT_TYPE" == "cluster" ]]; then
-        echo -e "${GREEN}✔ You selected: $DEPLOYMENT_TYPE deployment.${NC}"
-        break
-    else
-        echo -e "${RED}❌ Invalid input. Please enter either 'single' or 'cluster'.${NC}"
-    fi
-done
-
-# === Deployment Specific Handling ===
-if [ "$DEPLOYMENT_TYPE" == "cluster" ]; then
-    read -p "$(echo -e ${GREEN}'Will this node host Elasticsearch, Logstash, and Kibana? (y/n): '${NC})" HOST_ALL_SERVICES
-    if [[ ! "$HOST_ALL_SERVICES" =~ ^[Yy]$ ]]; then
-        echo -e "${GREEN}This script only supports adding additional Elasticsearch nodes. Clustering separate Logstash nodes will be developed later.${NC}"
-        read -p "$(echo -e ${GREEN}'Would you like to continue anyway? (y/n): '${NC})" CONTINUE_ANYWAY
-        if [[ ! "$CONTINUE_ANYWAY" =~ ^[Yy]$ ]]; then
-            echo -e "${GREEN}Exiting script at user request.${NC}"
-            exit 1
-        fi
-    fi
+# Add appropriate row to final output table
+if [[ "$INSTALL_RESPONSE" == "yes" ]]; then
+  add_to_summary_table "Services Cleaned/Reinstalled" "Yes"
+elif [[ "$INSTALL_RESPONSE" == "no" ]]; then
+  add_to_summary_table "First Time Install" "Yes"
+else
+  echo -e "${RED}Invalid response. Please type 'yes' or 'no'.${NC}"
+  exit 1
 fi
 
+# === Deployment Type Selection ===
+while true; do
+    echo -e "${GREEN}Select the deployment type:${NC}"
+    echo -e "${CYAN}  [1] Single-node ELK stack${NC}"
+    echo -e "${CYAN}  [2] Multi-node ELK cluster${NC}"
+    read -p "$(echo -e "${GREEN}Enter your choice (1 or 2): ${NC}")" DEPLOYMENT_OPTION
+
+    case "$DEPLOYMENT_OPTION" in
+        1)
+            DEPLOYMENT_TYPE="Single Node"
+            echo -e "${GREEN}✔ You selected: single deployment.${NC}"
+            add_to_summary_table "Deployment Type" "$DEPLOYMENT_TYPE"
+            break
+            ;;
+        2)
+            DEPLOYMENT_TYPE="Cluster"
+            echo -e "${GREEN}✔ You selected: cluster deployment.${NC}"
+            add_to_summary_table "Deployment Type" "$DEPLOYMENT_TYPE"
+            break
+            ;;
+        *)
+            echo -e "${RED}❌ Invalid input. Please enter 1 or 2.${NC}"
+            ;;
+    esac
+done
+
+
 # === Common IP Prompt and Assignment ===
+
 echo -e "\n${GREEN}Elasticsearch, Logstash, and Kibana will be hosted using the IP you enter below.${NC}"
+
 echo -e "${GREEN}--- Network Interfaces ---${NC}"
 ip -br a | awk '{print $1, $2, $3}' | while read iface state addr; do
     echo -e "${CYAN}$iface${NC} - $state - IP: ${YELLOW}$addr${NC}"
@@ -203,23 +244,29 @@ MGMT_IP=$(ip -4 -o addr show dev "$MGMT_IFACE" | awk '{print $4}' | cut -d/ -f1)
 echo -e "${GREEN}Use the following IP for accessing this node (management interface):${NC}"
 echo -e "${CYAN}$MGMT_IFACE${NC} - ${YELLOW}$MGMT_IP${NC}"
 
-# Prompt for IP and validate until correct format is entered
+# Prompt for IP and validate until correct
 while true; do
-    read -p "$(echo -e "${YELLOW}Enter the IP address to use for Elasticsearch, Logstash, and Kibana for this machine. : ${NC}")" COMMON_IP
+    read -p "$(echo -e "${YELLOW}Enter the IP address to use for Elasticsearch, Logstash, and Kibana: ${NC}")" COMMON_IP
     if validate_ip "$COMMON_IP"; then
         echo -e "${GREEN}✔ Accepted IP: $COMMON_IP${NC}"
         break
+    else
+        echo -e "${RED}❌ Invalid IP format. Please enter a valid IPv4 address.${NC}"
     fi
 done
 
-# Assign and validate IP
+# Assign to services
 ELASTIC_HOST=$COMMON_IP
 KIBANA_HOST=$COMMON_IP
 LOGSTASH_HOST=$COMMON_IP
 
+# Add to summary table
+add_to_summary_table "Management IP" "$COMMON_IP"
+
+
 # Ask if this is an airgapped environment
 echo -e "\n${YELLOW}Is this machine in an airgapped (offline) environment?${NC}"
-read -p "$(echo -e ${GREEN}Type \"yes\" to skip internet check, or \"no\" to verify connectivity: ${NC})" IS_AIRGAPPED
+prompt_input "Type \"yes\" to skip internet check, or \"no\" to verify connectivity: " IS_AIRGAPPED
 
 if [[ "$IS_AIRGAPPED" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
 	echo -e "${YELLOW}Airgapped mode confirmed. Skipping internet connectivity check.${NC}"
@@ -230,7 +277,7 @@ else
 	PING_COUNT=2
 
 	if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
-		echo -e "${GREEN}Internet connectivity confirmed via ping to $PING_TARGET.${NC}"
+		echo -e "${GREEN}Internet connectivity confirmed via ping to ${YELLOW}$PING_TARGET.${NC}"
 	else
 		echo -e "${RED}Unable to reach $PING_TARGET. Please verify that this host has internet access.${NC}"
 		read -p "$(echo -e "${YELLOW}Do you want to retry the connectivity check? (yes/no): ${NC}")" RETRY_NET
@@ -250,15 +297,31 @@ else
 	fi
 fi
 
-if [[ "$DEPLOYMENT_TYPE" == "cluster" ]]; then
+# Normalize the input
+IS_AIRGAPPED="$(echo "$IS_AIRGAPPED" | tr '[:upper:]' '[:lower:]' | xargs)"
+
+# Validate and add to summary table
+if [[ "$IS_AIRGAPPED" == "yes" ]]; then
+  echo -e "${GREEN}✔ Airgap check skipped.${NC}"
+  add_to_summary_table "Airgapped Environment" "Yes"
+elif [[ "$IS_AIRGAPPED" == "no" ]]; then
+  echo -e "${GREEN}✔ Internet connectivity will be verified.${NC}"
+  add_to_summary_table "Airgapped Environment" "No"
+else
+  echo -e "${RED}❌ Invalid input. Please type 'yes' or 'no'.${NC}"
+  exit 1
+fi
+
+if [[ "$DEPLOYMENT_TYPE" == "Cluster" ]]; then
     while true; do
         read -p "$(echo -e "${GREEN}How many additional Elasticsearch nodes will be added to this node for clustering?: ${NC}")" NODE_INPUT
         if [[ "$NODE_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             NODE_COUNT=$NODE_INPUT
             echo -e "${GREEN}✔ Cluster will include $NODE_COUNT additional node(s).${NC}"
+            add_to_summary_table "Additional Nodes" "$NODE_COUNT"
             break
         else
-            echo -e "${RED}Invalid input. Please enter a positive integer greater than 0.${NC}"
+            echo -e "${RED}❌ Invalid input. Please enter a positive integer greater than 0.${NC}"
         fi
     done
 fi
@@ -272,29 +335,30 @@ echo -e "${GREEN}Cluster will include $NODE_COUNT additional node(s).${NC}"
 NODE_COUNT=$((NODE_INPUT + 1))
 
 # Optional: Display the collected IPs
-echo -e "${GREEN}Elasticsearch host: $ELASTIC_HOST${NC}"
-echo -e "${GREEN}Kibana host: $KIBANA_HOST${NC}"
-echo -e "${GREEN}Logstash host: $LOGSTASH_HOST${NC}"
-
+echo -e "${GREEN}Elasticsearch host: ${YELLOW}$ELASTIC_HOST${NC}"
+echo -e "${GREEN}Kibana host: ${YELLOW}$KIBANA_HOST${NC}"
+echo -e "${GREEN}Logstash host: ${YELLOW}$LOGSTASH_HOST${NC}"
 
 # Prompt in a loop until valid node name is entered
 while true; do
-	read -p "$(echo -e "${GREEN}Enter the name you would like to assign your node (e.g., node-1): ${NC}")" NODE_NAME
+	read -p "$(echo -e "${GREEN}Enter the name you would like to assign your node (e.g., ${YELLOW}node-1${GREEN}): ${NC}")" NODE_NAME
 	if validate_nodename "$NODE_NAME"; then
-		echo -e "${GREEN}✔ Node name '${NODE_NAME}' is valid and has been accepted.${NC}"
+		echo -e "${GREEN}✔ Node name '${YELLOW}${NODE_NAME}${GREEN}' is valid and has been accepted.${NC}"
 		break
 	fi
 done
 
-
-# Prompt for superuser username with validation
+# Prompt for superuser usernam with validation and confirmation
 while true; do
-    read -p "$(echo -e "${GREEN}Enter a username for the superuser: ${NC}")" USERNAME
-    if validate_username "$USERNAME"; then
-        break
-    else
-        echo -e "${RED}Please enter a valid username.${NC}"
-    fi
+  prompt_input "Enter the superuser username for Kibana webUI access and Elasticsearch interactions: " USERNAME
+
+  if validate_username "$USERNAME"; then
+    echo -e "${GREEN}✔ Accepted username/email: $USERNAME${NC}"
+    add_to_summary_table "Admin Username" "$USERNAME"
+    break
+  else
+    echo -e "${RED}❌ Please enter a valid username or email address.${NC}"
+  fi
 done
 
 # Prompt for password with validation and confirmation
@@ -362,7 +426,7 @@ if grep -q '^NAME="Ubuntu"' /etc/os-release; then
         echo -e "\n${BLUE}No free space detected in Volume Group [$VG_NAME]. Skipping extension steps.${NC}"
     fi
 
-    # ✅ Always show final disk usage
+    # Always show final disk usage
     echo -e "\n${GREEN}Final root volume size and usage:${NC}"
     df -h /
 
@@ -370,14 +434,24 @@ else
     echo -e "\n${YELLOW}Non-Ubuntu system detected. If you are using LVM, you may need to manually extend your logical volume after installation.${NC}"
 fi
 
+# Set var for disk usage
+ROOT_FS_USAGE=$(df -h / | awk '/\/$/ {printf "Size: %s Used: %s Avail: %s Use%%: %s",$2,$3,$4,$5}')
+# Add to summary table
+add_to_summary_table "Root Disk Usage" "$ROOT_FS_USAGE"
+
 
 # Prompt in a loop until valid version is entered
 while true; do
-	read -p "$(echo -e "${GREEN}Enter the Elastic Stack version to install (e.g., 8.18.2 or 9.0.2): ${NC}")" ELASTIC_VERSION
-	if validate_version "$ELASTIC_VERSION"; then
-		echo -e "${GREEN}✔ Version '${ELASTIC_VERSION}' is valid and has been accepted.${NC}"
-		break
-	fi
+    read -p "$(echo -e "${GREEN}Enter the Elastic Stack version to install ${YELLOW}(e.g., 8.18.2 or 9.0.2)${GREEN}: ${NC}")" ELASTIC_VERSION
+    if validate_version "$ELASTIC_VERSION"; then
+        echo -e "${GREEN}✔ Version '${ELASTIC_VERSION}' is valid and has been accepted.${NC}"
+        add_to_summary_table "Elastic Stack Version" "$ELASTIC_VERSION"
+        break
+    else
+        echo -e "${RED}❌ Invalid version format. Please enter something like 8.18.2.${NC}"
+    fi
 done
 
-# Spinner function
+# Final table
+echo -e "\n${GREEN}Summary of your configuration:${NC}"
+print_summary_table
