@@ -1,6 +1,9 @@
 ![image](https://github.com/user-attachments/assets/8e753cf4-0682-44fa-8958-af8013fad562)
 
 
+https://github.com/user-attachments/assets/b7a82cb9-aad3-4a26-86d3-c4b73b0d70f1
+
+
 # ELK-Bash
 
 A set of Bash scripts that automate installation and configuration of the Elastic Stack (Elasticsearch, Logstash, Kibana) and Fleet/Elastic Agent on Ubuntu.
