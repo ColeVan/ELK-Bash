@@ -87,9 +87,6 @@ run_full_setup() {
     log_step "AIRGAPPED_MODE" "false"
   fi
 
-  # Run cleanup
-  source "$SCRIPT_DIR/cleanup.sh" && log_step "CLEANUP_COMPLETE" "true"
-
   # Display configuration summary
   echo -e "\n${GREEN}Summary of your configuration:${NC}"
   if type print_summary_table &>/dev/null; then
