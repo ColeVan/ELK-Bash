@@ -9,6 +9,14 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# logs steps for elk env file for history
+log_step() {
+  KEY="$1"
+  VALUE="$2"
+  grep -v "^$KEY=" "$ELK_ENV_FILE" > "$ELK_ENV_FILE.tmp" && mv "$ELK_ENV_FILE.tmp" "$ELK_ENV_FILE"
+  echo "$KEY=$VALUE" >> "$ELK_ENV_FILE"
+}
+
 # Validate an IPv4 address
 validate_ip() {
     local ip=$1

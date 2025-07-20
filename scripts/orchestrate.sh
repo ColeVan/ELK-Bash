@@ -1,36 +1,22 @@
 #!/bin/bash
 
 # Modular ELK Deployment Orchestrator with Menu
-set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ELK_ENV_FILE="$SCRIPT_DIR/.elk_env"
 
-# Source common functions
+# Source functions *before* any use of log_step
 source "$SCRIPT_DIR/functions.sh"
 
-# Initialize or load .elk_env
-if [ ! -f "$ELK_ENV_FILE" ]; then
-  echo "# ELK Deployment State" > "$ELK_ENV_FILE"
-  echo "DEPLOY_STARTED=$(date '+%Y-%m-%d %H:%M:%S')" >> "$ELK_ENV_FILE"
-else
-  source "$ELK_ENV_FILE"
-fi
+# Reset the env file
+rm -f "$ELK_ENV_FILE"
+echo "# ELK Deployment State" > "$ELK_ENV_FILE"
+log_step "DEPLOY_STARTED" "$(date '+%Y-%m-%d %H:%M:%S')"
 
-# Function to log and persist key state variables
-log_step() {
-  KEY="$1"
-  VALUE="$2"
-  grep -v "^$KEY=" "$ELK_ENV_FILE" > "$ELK_ENV_FILE.tmp" && mv "$ELK_ENV_FILE.tmp" "$ELK_ENV_FILE"
-  echo "$KEY=$VALUE" >> "$ELK_ENV_FILE"
-}
+# Load env values
+source "$ELK_ENV_FILE"
 
-# Function to view the .elk_env file
-view_env_file() {
-  clear
-  echo -e "${CYAN}Viewing .elk_env contents:${NC}\n"
-  cat "$ELK_ENV_FILE"
-  pause_and_return_to_menu
-}
+# Source common functions
+source "$SCRIPT_DIR/functions.sh"
 
 # Function to run secure_node_with_iptables
 run_firewall_hardening() {

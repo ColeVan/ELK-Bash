@@ -31,33 +31,30 @@ fi
 
 echo -e "${GREEN}✔ Running with sudo as expected.${NC}"
 
-# Prompt user for node type
-echo -e "${GREEN}Is this the first node in a cluster, or will this node be joining an existing cluster?${NC}"
-echo -e "${YELLOW}1) This is a new node.${NC}"
-echo -e "${YELLOW}2) Joining an existing cluster.${NC}"
+# Prompt user for node type in a loop
+while true; do
+  echo -e "${GREEN}Is this the first node in a cluster, or will this node be joining an existing cluster?${NC}"
+  echo -e "${YELLOW}1) This is a new node.${NC}"
+  echo -e "${YELLOW}2) Joining an existing cluster.${NC}"
 
-read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
+  read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
 
-# Validate input
-if [[ "$NODE_OPTION" != "1" && "$NODE_OPTION" != "2" ]]; then
-    echo -e "${RED}❌ Invalid selection. Please enter 1 or 2 only.${NC}"
-    pause_and_return_to_menu
-    return
-fi
-
-# Process selection
-case "$NODE_OPTION" in
+  case "$NODE_OPTION" in
     1)
-        echo -e "${GREEN}✔ Proceeding with setting up a new node...${NC}"
-        ;;
+      echo -e "${GREEN}✔ Proceeding with setting up a new node...${NC}"
+      break
+      ;;
     2)
-        echo -e "${GREEN}➡ This node will join an existing cluster.${NC}"
-        set -e
-        SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-        source "$SCRIPT_DIR/deploy_elasticsearch_node.sh"
-        exit 0
-        ;;
-esac
+      echo -e "${GREEN}➡ This node will join an existing cluster.${NC}"
+      SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+      source "$SCRIPT_DIR/deploy_elasticsearch_node.sh"
+      return 0  # or exit 0 if this is in a standalone script
+      ;;
+    *)
+      echo -e "${RED}❌ Invalid selection. Please enter 1 or 2 only.${NC}"
+      ;;
+  esac
+done
 
 # --- Prompt for ELK install history ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
@@ -128,34 +125,36 @@ perform_elk_cleanup() {
         echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
     fi
 
- # --- Clean Docker containers related to Elastic Package Registry ---
-echo -e "${CYAN}Checking for Elastic Package Registry containers...${NC}"
+		# --- Docker Cleanup for Elastic Package Registry ---
+	echo -e "${CYAN}Cleaning up Elastic Package Registry Docker resources...${NC}"
 
-PACKAGE_CONTAINER_IDS=$(docker ps -aq --filter "ancestor=docker.elastic.co/package-registry/distribution")
+	# Find all containers using EPR images (regardless of version)
+	EPR_CONTAINERS=$(docker ps -a --format "{{.ID}} {{.Image}}" \
+	  | grep "docker.elastic.co/package-registry/distribution:" \
+	  | awk '{print $1}')
 
-if [ -n "$PACKAGE_CONTAINER_IDS" ]; then
-    echo -e "${YELLOW}Stopping and removing container(s):${NC}\n$PACKAGE_CONTAINER_IDS"
-    docker rm -f $PACKAGE_CONTAINER_IDS >/dev/null 2>&1 && \
-    echo -e "${GREEN}✔ Container(s) removed.${NC}" || \
-    echo -e "${RED}⚠ Failed to remove some containers.${NC}"
-else
-    echo -e "${GREEN}No Elastic Package Registry containers found.${NC}"
-fi
+	if [[ -n "$EPR_CONTAINERS" ]]; then
+	  echo -e "${YELLOW}Stopping and removing container(s):${NC}\n$EPR_CONTAINERS"
+	  docker stop $EPR_CONTAINERS >/dev/null 2>&1
+	  docker rm $EPR_CONTAINERS >/dev/null 2>&1
+	  echo -e "${GREEN}✔ Containers stopped and removed.${NC}"
+	else
+	  echo -e "${GREEN}No running EPR containers found.${NC}"
+	fi
 
-# --- Dynamically remove images from Elastic Package Registry ---
-echo -e "${CYAN}Checking for Elastic Package Registry images...${NC}"
+	# Find and remove matching EPR image IDs
+	EPR_IMAGE_IDS=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" \
+	  | grep "^docker.elastic.co/package-registry/distribution:" \
+	  | awk '{print $2}' | sort -u)
 
-PACKAGE_IMAGE_IDS=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | grep "^docker.elastic.co/package-registry/distribution" | awk '{print $2}')
-
-if [ -n "$PACKAGE_IMAGE_IDS" ]; then
-    echo -e "${YELLOW}Removing image(s):${NC}\n$PACKAGE_IMAGE_IDS"
-    docker rmi -f $PACKAGE_IMAGE_IDS >/dev/null 2>&1 && \
-    echo -e "${GREEN}✔ Image(s) removed.${NC}" || \
-    echo -e "${RED}⚠ Failed to remove some images.${NC}"
-else
-    echo -e "${GREEN}No Elastic Package Registry images found.${NC}"
-fi
-
+	if [[ -n "$EPR_IMAGE_IDS" ]]; then
+	  echo -e "${YELLOW}Removing image(s):${NC}\n$EPR_IMAGE_IDS"
+	  docker rmi -f $EPR_IMAGE_IDS >/dev/null 2>&1 \
+		&& echo -e "${GREEN}✔ Image(s) removed.${NC}" \
+		|| echo -e "${RED}⚠ Failed to remove some images.${NC}"
+	else
+	  echo -e "${GREEN}No EPR images found. Skipping image removal...${NC}"
+	fi
 
     # Clean home directory artifacts
     echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
