@@ -115,19 +115,34 @@ perform_elk_cleanup() {
         echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
     fi
 
-    # Clean Docker containers related to Elastic Package Registry
-    echo -e "${CYAN}Checking for running Elastic Package Registry containers...${NC}"
-    PACKAGE_CONTAINER_IDS=$(docker ps -aq --filter ancestor=docker.elastic.co/package-registry/distribution)
-    if [ -n "$PACKAGE_CONTAINER_IDS" ]; then
-        echo -e "${YELLOW}Stopping and removing container(s):\n$PACKAGE_CONTAINER_IDS${NC}"
-        docker rm -f $PACKAGE_CONTAINER_IDS >/dev/null 2>&1
-        echo -e "${GREEN}✔ Container(s) removed.${NC}"
-    else
-        echo -e "${GREEN}No Elastic Package Registry containers found.${NC}"
-    fi
+ # --- Clean Docker containers related to Elastic Package Registry ---
+echo -e "${CYAN}Checking for Elastic Package Registry containers...${NC}"
 
-    echo -e "${CYAN}Removing Elastic Package Registry images...${NC}"
-    docker rmi -f $(docker images -q docker.elastic.co/package-registry/distribution) >/dev/null 2>&1 || echo -e "${YELLOW}No images to remove or failed to remove.${NC}"
+PACKAGE_CONTAINER_IDS=$(docker ps -aq --filter "ancestor=docker.elastic.co/package-registry/distribution")
+
+if [ -n "$PACKAGE_CONTAINER_IDS" ]; then
+    echo -e "${YELLOW}Stopping and removing container(s):${NC}\n$PACKAGE_CONTAINER_IDS"
+    docker rm -f $PACKAGE_CONTAINER_IDS >/dev/null 2>&1 && \
+    echo -e "${GREEN}✔ Container(s) removed.${NC}" || \
+    echo -e "${RED}⚠ Failed to remove some containers.${NC}"
+else
+    echo -e "${GREEN}No Elastic Package Registry containers found.${NC}"
+fi
+
+# --- Dynamically remove images from Elastic Package Registry ---
+echo -e "${CYAN}Checking for Elastic Package Registry images...${NC}"
+
+PACKAGE_IMAGE_IDS=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | grep "^docker.elastic.co/package-registry/distribution" | awk '{print $2}')
+
+if [ -n "$PACKAGE_IMAGE_IDS" ]; then
+    echo -e "${YELLOW}Removing image(s):${NC}\n$PACKAGE_IMAGE_IDS"
+    docker rmi -f $PACKAGE_IMAGE_IDS >/dev/null 2>&1 && \
+    echo -e "${GREEN}✔ Image(s) removed.${NC}" || \
+    echo -e "${RED}⚠ Failed to remove some images.${NC}"
+else
+    echo -e "${GREEN}No Elastic Package Registry images found.${NC}"
+fi
+
 
     # Clean home directory artifacts
     echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
