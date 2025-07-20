@@ -25,26 +25,32 @@ fi
 
 echo -e "${GREEN}✔ Running with sudo as expected.${NC}"
 
+# Prompt user for node role
 echo -e "${GREEN}Is this the first node in a cluster, or will this node be joining an existing cluster?${NC}"
 echo -e "${YELLOW}1) This is a new node.${NC}"
 echo -e "${YELLOW}2) Joining an existing cluster.${NC}"
 
-read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
+# Loop until valid option is selected
+while true; do
+    read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
 
-case "$NODE_OPTION" in
-    1)
-        echo -e "${GREEN}✔ Proceeding with setting up a new node...${NC}"
-        ;;
-	2)
-		echo -e "${GREEN}➡ This node will join an existing cluster.${NC}"
-
-		set -e
-		SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-		source "$SCRIPT_DIR/deploy_elasticsearch_node.sh"
-		exit 0
-		;;
-esac
+    case "$NODE_OPTION" in
+        1)
+            echo -e "${GREEN}✔ Proceeding with setting up a new node...${NC}"
+            break
+            ;;
+        2)
+            echo -e "${GREEN}➡ This node will join an existing cluster.${NC}"
+            set -e
+            SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+            source "$SCRIPT_DIR/deploy_elasticsearch_node.sh"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}❌ Invalid selection. Please enter 1 or 2 only.${NC}"
+            ;;
+    esac
+done
 
 # --- Prompt for ELK install history ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
