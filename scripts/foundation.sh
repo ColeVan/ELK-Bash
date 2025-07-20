@@ -25,32 +25,39 @@ fi
 
 echo -e "${GREEN}✔ Running with sudo as expected.${NC}"
 
-# Prompt user for node role
+# Prompt user for node type
 echo -e "${GREEN}Is this the first node in a cluster, or will this node be joining an existing cluster?${NC}"
 echo -e "${YELLOW}1) This is a new node.${NC}"
 echo -e "${YELLOW}2) Joining an existing cluster.${NC}"
 
-# Loop until valid option is selected
-while true; do
-    read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
+# Trap Ctrl+C and return to menu
+trap 'echo -e "\n${YELLOW}⚠️   Setup interrupted by user. Returning to main menu...${NC}"; pause_and_return_to_menu' SIGINT
 
-    case "$NODE_OPTION" in
-        1)
-            echo -e "${GREEN}✔ Proceeding with setting up a new node...${NC}"
-            break
-            ;;
-        2)
-            echo -e "${GREEN}➡ This node will join an existing cluster.${NC}"
-            set -e
-            SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-            source "$SCRIPT_DIR/deploy_elasticsearch_node.sh"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}❌ Invalid selection. Please enter 1 or 2 only.${NC}"
-            ;;
-    esac
-done
+read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
+
+# Disable trap after read completes
+trap - SIGINT
+
+# Validate input
+if [[ "$NODE_OPTION" != "1" && "$NODE_OPTION" != "2" ]]; then
+    echo -e "${RED}❌ Invalid selection. Please enter 1 or 2 only.${NC}"
+    pause_and_return_to_menu
+    return
+fi
+
+# Process selection
+case "$NODE_OPTION" in
+    1)
+        echo -e "${GREEN}✔ Proceeding with setting up a new node...${NC}"
+        ;;
+    2)
+        echo -e "${GREEN}➡ This node will join an existing cluster.${NC}"
+        set -e
+        SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+        source "$SCRIPT_DIR/deploy_elasticsearch_node.sh"
+        exit 0
+        ;;
+esac
 
 # --- Prompt for ELK install history ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
