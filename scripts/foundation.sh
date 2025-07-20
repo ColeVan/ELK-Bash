@@ -3,6 +3,12 @@ clear
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/functions.sh"
 
+# Trap Ctrl+C and return to menu
+trap 'echo -e "\n${YELLOW}⚠️   Setup interrupted by user. Returning to main menu...${NC}"; pause_and_return_to_menu' SIGINT
+
+# Disable trap after read completes
+trap - SIGINT
+
 echo -e "${GREEN}"
 cat << 'EOF'
 ▓█████  ██▓     ██ ▄█▀    ▄▄▄▄    ▄▄▄        ██████  ██░ ██ 
@@ -30,13 +36,7 @@ echo -e "${GREEN}Is this the first node in a cluster, or will this node be joini
 echo -e "${YELLOW}1) This is a new node.${NC}"
 echo -e "${YELLOW}2) Joining an existing cluster.${NC}"
 
-# Trap Ctrl+C and return to menu
-trap 'echo -e "\n${YELLOW}⚠️   Setup interrupted by user. Returning to main menu...${NC}"; pause_and_return_to_menu' SIGINT
-
 read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
-
-# Disable trap after read completes
-trap - SIGINT
 
 # Validate input
 if [[ "$NODE_OPTION" != "1" && "$NODE_OPTION" != "2" ]]; then
