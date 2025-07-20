@@ -3,15 +3,6 @@ clear
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/functions.sh"
 
-# Define color codes (ANSI escape codes)
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[1;34m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
-
 echo -e "${GREEN}"
 cat << 'EOF'
 ▓█████  ██▓     ██ ▄█▀    ▄▄▄▄    ▄▄▄        ██████  ██░ ██ 
@@ -34,7 +25,7 @@ fi
 
 echo -e "${GREEN}✔ Running with sudo as expected.${NC}"
 
-echo -e "${GREEN}Is this the first node to be set up, or will this node join an existing cluster?${NC}"
+echo -e "${GREEN}Is this the first node in a cluster, or will this node be joining an existing cluster?${NC}"
 echo -e "${YELLOW}1) This is a new node.${NC}"
 echo -e "${YELLOW}2) Joining an existing cluster.${NC}"
 
@@ -55,18 +46,32 @@ case "$NODE_OPTION" in
 		;;
 esac
 
-
 # --- Prompt for ELK install history ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
-# Prompt the user
-prompt_input "Type \"${YELLOW}yes${GREEN}\" if there is a previous installation on this machine, or \"${YELLOW}no${GREEN}\" to continue with a fresh install: " INSTALL_RESPONSE
+prompt_input "$(echo -e "${GREEN}Type \"${YELLOW}yes${GREEN}\" if there is a previous installation on this machine, or \"${YELLOW}no${GREEN}\" to continue with a fresh install:${NC} ")" INSTALL_RESPONSE
 
-if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-    PREVIOUS_INSTALL=true
-    FRESH_INSTALL=false
+# --- Function to clean up any existing ELK stack and Elastic Agent ---
+perform_elk_cleanup() {
     echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
+    echo "           This may take a few minutes — Go grab a coffee!"
+    echo -e "${NC}\n"
 
-    # Stop and disable services, then forcefully kill remaining processes if needed
+    # Spinner function
+    spinner() {
+        local pid=$1
+        local delay=0.1
+        local spinstr='|/-\'
+        while ps -p "$pid" > /dev/null 2>&1; do
+            local temp=${spinstr#?}
+            printf " [%c]  " "$spinstr"
+            spinstr=$temp${spinstr%"$temp"}
+            sleep $delay
+            printf "\b\b\b\b\b\b"
+        done
+        printf "    \b\b\b\b"
+    }
+
+    # Stop and disable services
     for svc in elasticsearch logstash kibana; do
         if systemctl list-units --type=service | grep -q "$svc"; then
             echo -e "${CYAN}Stopping and disabling $svc...${NC}"
@@ -76,113 +81,132 @@ if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
             echo -e "${YELLOW}$svc service not found. Skipping systemd stop...${NC}"
         fi
 
-        # Force kill any lingering processes
+        # Kill lingering processes
         echo -e "${CYAN}Killing any remaining $svc processes...${NC}"
         sudo pkill -f "$svc" 2>/dev/null || echo -e "${YELLOW}No lingering $svc processes found.${NC}"
     done
 
-		# --- Clean up Elastic Agent ---
-	echo -e "${CYAN}Checking for Elastic Agent cleanup...${NC}"
+    # Elastic Agent cleanup
+    echo -e "${CYAN}Checking for Elastic Agent cleanup...${NC}"
+    if pgrep -f elastic-agent > /dev/null; then
+        echo -e "${YELLOW}Elastic Agent process detected. Terminating...${NC}"
+        sudo pkill -f elastic-agent
+        echo -e "${GREEN}✔ Elastic Agent process terminated.${NC}"
+    else
+        echo -e "${GREEN}No running Elastic Agent process found.${NC}"
+    fi
 
-	# Kill any running elastic-agent processes
-	if pgrep -f elastic-agent > /dev/null; then
-		echo -e "${YELLOW}Elastic Agent process detected. Terminating...${NC}"
-		sudo pkill -f elastic-agent
-		echo -e "${GREEN}✔ Elastic Agent process terminated.${NC}"
-	else
-		echo -e "${GREEN}No running Elastic Agent process found.${NC}"
-	fi
+    if [ -d "/opt/Elastic" ]; then
+        echo -e "${YELLOW}Removing existing Elastic Agent installation at /opt/Elastic...${NC}"
+        sudo rm -rf /opt/Elastic
+        echo -e "${GREEN}✔ Elastic Agent directory removed successfully.${NC}"
+    else
+        echo -e "${GREEN}No Elastic Agent directory found at /opt/Elastic. Skipping...${NC}"
+    fi
 
-	# Remove Elastic Agent install directory
-	if [ -d "/opt/Elastic" ]; then
-		echo -e "${YELLOW}Removing existing Elastic Agent installation at /opt/Elastic...${NC}"
-		sudo rm -rf /opt/Elastic
-		echo -e "${GREEN}✔ Elastic Agent directory removed successfully.${NC}"
-	else
-		echo -e "${GREEN}No Elastic Agent directory found at /opt/Elastic. Skipping...${NC}"
-	fi
+    if [ -f "/etc/systemd/system/elastic-agent.service" ]; then
+        echo -e "${YELLOW}Found systemd unit file for Elastic Agent. Cleaning up...${NC}"
+        sudo systemctl disable elastic-agent 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/elastic-agent.service
+        sudo systemctl daemon-reexec
+        sudo systemctl daemon-reload
+        echo -e "${GREEN}✔ Removed stale elastic-agent systemd service.${NC}"
+    else
+        echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
+    fi
 
-	# Remove lingering systemd service unit
-	if [ -f "/etc/systemd/system/elastic-agent.service" ]; then
-		echo -e "${YELLOW}Found systemd unit file for Elastic Agent. Cleaning up...${NC}"
-		sudo systemctl disable elastic-agent 2>/dev/null || true
-		sudo rm -f /etc/systemd/system/elastic-agent.service
-		sudo systemctl daemon-reexec
-		sudo systemctl daemon-reload
-		echo -e "${GREEN}✔ Removed stale elastic-agent systemd service.${NC}"
-	else
-		echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
-	fi
-	
-	# Cleanup: Remove lingering Elastic Agent files from user's home directory
-	echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
+    # Clean home directory artifacts
+    echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
+    AGENT_TAR_PATTERN="$HOME/elastic-agent-*-linux-x86_64.tar.gz"
+    AGENT_DIR_PATTERN="$HOME/elastic-agent-*-linux-x86_64"
+    shopt -s nullglob
 
-	# Define patterns
-	AGENT_TAR_PATTERN="$HOME/elastic-agent-*-linux-x86_64.tar.gz"
-	AGENT_DIR_PATTERN="$HOME/elastic-agent-*-linux-x86_64"
+    AGENT_TARS=($AGENT_TAR_PATTERN)
+    if [ ${#AGENT_TARS[@]} -gt 0 ]; then
+        for file in "${AGENT_TARS[@]}"; do
+            echo -e "${YELLOW}Removing Elastic Agent archive: $(basename "$file")${NC}"
+            rm -f "$file"
+        done
+    else
+        echo -e "${GREEN}No Elastic Agent tar.gz files found. Skipping archive cleanup...${NC}"
+    fi
 
-	shopt -s nullglob
+    AGENT_DIRS=($AGENT_DIR_PATTERN)
+    if [ ${#AGENT_DIRS[@]} -gt 0 ]; then
+        for dir in "${AGENT_DIRS[@]}"; do
+            if [ -d "$dir" ]; then
+                echo -e "${YELLOW}Removing Elastic Agent directory: $(basename "$dir")${NC}"
+                rm -rf "$dir"
+            fi
+        done
+    else
+        echo -e "${GREEN}No Elastic Agent directories found. Skipping directory cleanup...${NC}"
+    fi
 
-	# Find tarballs
-	AGENT_TARS=($AGENT_TAR_PATTERN)
-	if [ ${#AGENT_TARS[@]} -gt 0 ]; then
-		for file in "${AGENT_TARS[@]}"; do
-			echo -e "${YELLOW}Removing Elastic Agent archive: $(basename "$file")${NC}"
-			rm -f "$file"
-		done
-	else
-		echo -e "${GREEN}No Elastic Agent tar.gz files found. Skipping archive cleanup...${NC}"
-	fi
+    shopt -u nullglob
 
-	# Find directories
-	AGENT_DIRS=($AGENT_DIR_PATTERN)
-	if [ ${#AGENT_DIRS[@]} -gt 0 ]; then
-		for dir in "${AGENT_DIRS[@]}"; do
-			if [ -d "$dir" ]; then
-				echo -e "${YELLOW}Removing Elastic Agent directory: $(basename "$dir")${NC}"
-				rm -rf "$dir"
-			fi
-		done
-	else
-		echo -e "${GREEN}No Elastic Agent directories found. Skipping directory cleanup...${NC}"
-	fi
-
-	shopt -u nullglob
-
-	echo -e "${GREEN}✔ Finished cleaning up Elastic Agent artifacts in home directory.${NC}"
-
-
-    # Uninstall packages
+    # Uninstall packages and remove residual directories
     echo -e "${CYAN}Attempting to uninstall Elasticsearch, Logstash, and Kibana...${NC}"
     sudo apt-get purge -y elasticsearch logstash kibana > /dev/null 2>&1 || true
     sudo apt-get autoremove -y > /dev/null 2>&1 || true
 
-    # Remove directories and files (only if they exist)
     paths_to_clean=(
         /etc/elasticsearch /etc/logstash /etc/kibana
         /var/lib/elasticsearch /var/lib/logstash
         /var/log/elasticsearch /var/log/logstash /var/log/kibana
         /usr/share/elasticsearch /usr/share/logstash /usr/share/kibana
         /etc/apt/sources.list.d/elastic-8.x.list
-		/etc/apt/sources.list.d/elastic-9.x.list
+        /etc/apt/sources.list.d/elastic-9.x.list
     )
 
     for path in "${paths_to_clean[@]}"; do
         if [ -e "$path" ]; then
             echo -e "${CYAN}Removing $path...${NC}"
             sudo rm -rf "$path"
-            
         else
             echo -e "${YELLOW}Path not found: $path — skipping.${NC}"
         fi
     done
 
     echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
+}
+
+# --- User Input Processing ---
+if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
+    PREVIOUS_INSTALL=true
+    FRESH_INSTALL=false
+    perform_elk_cleanup
 
 elif [[ "$INSTALL_RESPONSE" =~ ^[Nn][Oo]$ ]]; then
-    PREVIOUS_INSTALL=false
-    FRESH_INSTALL=true
-    echo -e "${GREEN}Confirmed: Fresh install. Continuing setup...${NC}"
+    echo -e "${YELLOW}User reported this is a clean install. Verifying if indeed this machine is clean...${NC}"
+
+    SERVICES_FOUND=false
+    for svc in elasticsearch logstash kibana; do
+        if systemctl list-units --type=service | grep -q "$svc"; then
+            echo -e "${RED}Detected $svc service on system.${NC}"
+            SERVICES_FOUND=true
+        fi
+    done
+
+    if $SERVICES_FOUND; then
+        echo -e "${YELLOW}⚠️  Found Elasticsearch, Logstash, or Kibana services still present.${NC}"
+        read -p "$(echo -e "${CYAN}Do you want to clean up old ELK services before continuing? (yes/no): ${NC}")" CONFIRM_CLEANUP
+
+        if [[ "$CONFIRM_CLEANUP" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
+            echo -e "${YELLOW}Proceeding with cleanup of old services...${NC}"
+            PREVIOUS_INSTALL=true
+            FRESH_INSTALL=false
+            perform_elk_cleanup
+        else
+            echo -e "${RED}Cleanup skipped. Cannot proceed while old services exist. Exiting.${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${GREEN}System appears clean. Proceeding with fresh install...${NC}"
+        PREVIOUS_INSTALL=false
+        FRESH_INSTALL=true
+    fi
+
 else
     echo -e "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}"
     exit 1
@@ -266,10 +290,10 @@ add_to_summary_table "Management IP" "$COMMON_IP"
 
 # Ask if this is an airgapped environment
 echo -e "\n${YELLOW}Is this machine in an airgapped (offline) environment?${NC}"
-prompt_input "Type \"yes\" to skip internet check, or \"no\" to verify connectivity: " IS_AIRGAPPED
+prompt_input "Type \"yes\" to skip internet check, or \"no\" to verify connectivity: " IS_airgapped
 
-if [[ "$IS_AIRGAPPED" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-	echo -e "${YELLOW}Airgapped mode confirmed. Skipping internet connectivity check.${NC}"
+if [[ "$IS_airgapped" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
+	echo -e "${YELLOW}airgapped mode confirmed. Skipping internet connectivity check.${NC}"
 else
 	# --- Check internet connectivity ---
 	echo -e "\n${GREEN}Checking internet connectivity...${NC}"
@@ -298,15 +322,15 @@ else
 fi
 
 # Normalize the input
-IS_AIRGAPPED="$(echo "$IS_AIRGAPPED" | tr '[:upper:]' '[:lower:]' | xargs)"
+IS_airgapped="$(echo "$IS_airgapped" | tr '[:upper:]' '[:lower:]' | xargs)"
 
 # Validate and add to summary table
-if [[ "$IS_AIRGAPPED" == "yes" ]]; then
+if [[ "$IS_airgapped" == "yes" ]]; then
   echo -e "${GREEN}✔ Airgap check skipped.${NC}"
-  add_to_summary_table "Airgapped Environment" "Yes"
-elif [[ "$IS_AIRGAPPED" == "no" ]]; then
+  add_to_summary_table "airgapped Environment" "Yes"
+elif [[ "$IS_airgapped" == "no" ]]; then
   echo -e "${GREEN}✔ Internet connectivity will be verified.${NC}"
-  add_to_summary_table "Airgapped Environment" "No"
+  add_to_summary_table "airgapped Environment" "No"
 else
   echo -e "${RED}❌ Invalid input. Please type 'yes' or 'no'.${NC}"
   exit 1
@@ -348,7 +372,7 @@ while true; do
 	fi
 done
 
-# Prompt for superuser usernam with validation and confirmation
+# Prompt for superuser username with validation and confirmation
 while true; do
   prompt_input "Enter the superuser username for Kibana webUI access and Elasticsearch interactions: " USERNAME
 

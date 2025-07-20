@@ -33,7 +33,7 @@ echo -e "${CYAN}Extracting Elastic Agent archive...${NC}"
 echo -e "${GREEN}✔ Elastic Agent ready at: ${DEST_DIR}/elastic-agent-${ELASTIC_VERSION}-linux-x86_64${NC}"
 
 # Create Fleet Policy
-leet_policy_id=$(curl --request POST \
+fleet_policy_id=$(curl --request POST \
   --url "https://${ELASTIC_HOST}:5601/api/fleet/agent_policies?sys_monitoring=true" \
   --header 'Accept: */*' \
   --header "Authorization: Bearer $api_access_token" \
@@ -195,7 +195,11 @@ windows_policy_EDR_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
   }' --insecure)
 
 # Output the response from the second request
-echo -e "${GREEN}$windows_policy_EDR_info..${NC}"
+if [[ -n "$windows_policy_EDR_info" ]]; then
+  echo -e "${GREEN}Windows EDR policy has been deployed. Elastic Defend ${ELASTIC_VERSION}${NC}"
+else
+  echo -e "${RED}Failed to deploy Windows EDR policy.${NC}"
+fi
 
 # Check if the "id" was successfully extracted
 if [ -z "$policy_id" ]; then
@@ -266,17 +270,21 @@ ${RED}Failed to obtain access token.${NC}
 "
 fi
 
-# Send API request
-curl -X 'POST' \
+response=$(curl -s -X 'POST' \
   --url "https://${ELASTIC_HOST}:5601/api/fleet/outputs" \
   -H "Authorization: Bearer $api_access_token_logstash" \
   -H "kbn-xsrf: true" \
   -H "accept: application/json" \
   -H "Content-Type: application/json" \
   --data-binary "$JSON_PAYLOAD" \
-  --insecure
-  
-echo -e "${GREEN}Finished creating Fleet server Logstash output.${NC}"
+  --insecure)
+
+# Optional: check success, e.g. look for "id" or a known field
+if [[ -n "$response" ]]; then
+  echo -e "${GREEN}Finished creating Fleet server Logstash output.${NC}"
+else
+  echo -e "${RED}Failed to create Fleet server Logstash output.${NC}"
+fi
 
 # Enable Kibana logging for debugging
 echo -e "${GREEN}Enabling Kibana logging to /var/log/kibana.log...${NC}"
@@ -370,20 +378,3 @@ if [[ "$DEPLOYMENT_TYPE" == "cluster" ]]; then
     fi
 fi
 
-# Final table
-echo -e "\n${GREEN}Summary of your configuration:${NC}"
-print_summary_table
-
-echo -e "${GREEN}"
-cat << 'EOF'
-▓█████  ██▓     ██ ▄█▀    ▄▄▄▄    ▄▄▄        ██████  ██░ ██ 
-▓█   ▀ ▓██▒     ██▄█▒    ▓█████▄ ▒████▄    ▒██    ▒ ▓██░ ██▒
-▒███   ▒██░    ▓███▄░    ▒██▒ ▄██▒██  ▀█▄  ░ ▓██▄   ▒██▀▀██░
-▒▓█  ▄ ▒██░    ▓██ █▄    ▒██░█▀  ░██▄▄▄▄██   ▒   ██▒░▓█ ░██ 
-░▒████▒░██████▒▒██▒ █▄   ░▓█  ▀█▓ ▓█   ▓██▒▒██████▒▒░▓█▒░██▓
-░░ ▒░ ░░ ▒░▓  ░▒ ▒▒ ▓▒   ░▒▓███▀▒ ▒▒   ▓▒█░▒ ▒▓▒ ▒ ░ ▒ ░░▒░▒
- ░ ░  ░░ ░ ▒  ░░ ░▒ ▒░   ▒░▒   ░   ▒   ▒▒ ░░ ░▒  ░ ░ ▒ ░▒░ ░
-   ░     ░ ░   ░ ░░ ░     ░    ░   ░   ▒   ░  ░  ░   ░  ░░ ░
-   ░  ░    ░  ░░  ░       ░            ░  ░      ░   ░  ░  ░                         
-EOF
-echo -e "${NC}"
