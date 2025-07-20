@@ -85,8 +85,6 @@ run_full_setup() {
     log_step "AIRGAPPED_MODE" "false"
   fi
 
-  source "$SCRIPT_DIR/cleanup.sh" && log_step "CLEANUP_COMPLETE" "true"
-
   echo -e "\n${GREEN}Summary of your configuration:${NC}"
   print_summary_table
 
@@ -113,12 +111,12 @@ main_menu() {
   echo "   ELK Stack Modular Deployment Menu"
   echo "========================================="
   echo -e "${NC}"
-  echo "1. Run full setup (foundation, services, agent, EPR if needed, cleanup)"
+  echo "1. Run full setup (foundation, services, Fleet Server Setup, and EPR if needed.)"
   echo "2. Run foundation.sh"
   echo "3. Run service_install_setup.sh"
   echo "4. Run agent_install_fleet_setup.sh"
-  echo "5. Run Elastic_EPR_install.sh (airgapped only)"
-  echo "6. Run cleanup.sh"
+  echo "5. Run Elastic_EPR_install.sh (Only if moving to air gap env)"
+  echo "6. Run cleanup.sh" (cleans previous installs)
   echo "7. Run firewall hardening (secure_node_with_iptables)"
   echo "8. View deployment log (.elk_env)"
   echo "9. Exit"
