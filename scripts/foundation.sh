@@ -56,20 +56,20 @@ perform_elk_cleanup() {
     echo "           This may take a few minutes — Go grab a coffee!"
     echo -e "${NC}\n"
 
-    # Spinner function
-    spinner() {
-        local pid=$1
-        local delay=0.1
-        local spinstr='|/-\'
-        while ps -p "$pid" > /dev/null 2>&1; do
-            local temp=${spinstr#?}
-            printf " [%c]  " "$spinstr"
-            spinstr=$temp${spinstr%"$temp"}
-            sleep $delay
-            printf "\b\b\b\b\b\b"
-        done
-        printf "    \b\b\b\b"
-    }
+	# Spinner function
+	spinner() {
+		local pid=$1
+		local delay=0.1
+		local spinstr='|/-\\'  # <- Fixed: Escaped the backslash
+		while ps -p "$pid" > /dev/null 2>&1; do
+			local temp=${spinstr#?}
+			printf " [%c]  " "$spinstr"
+			spinstr=$temp${spinstr%"$temp"}
+			sleep $delay
+			printf "\b\b\b\b\b\b"
+		done
+		printf "    \b\b\b\b"
+	}
 
     # Stop and disable services
     for svc in elasticsearch logstash kibana; do
@@ -114,6 +114,20 @@ perform_elk_cleanup() {
     else
         echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
     fi
+
+    # Clean Docker containers related to Elastic Package Registry
+    echo -e "${CYAN}Checking for running Elastic Package Registry containers...${NC}"
+    PACKAGE_CONTAINER_IDS=$(docker ps -aq --filter ancestor=docker.elastic.co/package-registry/distribution)
+    if [ -n "$PACKAGE_CONTAINER_IDS" ]; then
+        echo -e "${YELLOW}Stopping and removing container(s):\n$PACKAGE_CONTAINER_IDS${NC}"
+        docker rm -f $PACKAGE_CONTAINER_IDS >/dev/null 2>&1
+        echo -e "${GREEN}✔ Container(s) removed.${NC}"
+    else
+        echo -e "${GREEN}No Elastic Package Registry containers found.${NC}"
+    fi
+
+    echo -e "${CYAN}Removing Elastic Package Registry images...${NC}"
+    docker rmi -f $(docker images -q docker.elastic.co/package-registry/distribution) >/dev/null 2>&1 || echo -e "${YELLOW}No images to remove or failed to remove.${NC}"
 
     # Clean home directory artifacts
     echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
@@ -170,6 +184,7 @@ perform_elk_cleanup() {
 
     echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
 }
+
 
 # --- User Input Processing ---
 if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
