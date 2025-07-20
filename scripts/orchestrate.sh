@@ -126,7 +126,7 @@ main_menu() {
   echo "3. Run service_install_setup.sh"
   echo "4. Run agent_install_fleet_setup.sh"
   echo "5. Run Elastic_EPR_install.sh (Only if moving to air gap env)"
-  echo "6. Run cleanup.sh" (cleans previous installs)
+  echo "6. Run cleanup.sh (cleans previous installs)"
   echo "7. Run firewall hardening (secure_node_with_iptables)"
   echo "8. View deployment log (.elk_env)"
   echo "9. Exit"
