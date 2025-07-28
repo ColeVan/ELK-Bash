@@ -61,6 +61,7 @@ run_full_setup() {
   {
     # Run setup steps
     source "$SCRIPT_DIR/foundation.sh" && log_step "FOUNDATION_SETUP" "true"
+	source "$SCRIPT_DIR/airgap_setup.sh" && log_step "FOUNDATION_SETUP" "true"
     source "$SCRIPT_DIR/service_install_setup.sh" && log_step "SERVICE_INSTALL" "true"
     source "$SCRIPT_DIR/agent_install_fleet_setup.sh" && log_step "AGENT_FLEET_SETUP" "true"
 
@@ -121,10 +122,12 @@ main_menu() {
   echo "6. Run cleanup.sh (cleans previous installs)"
   echo "7. Run firewall hardening (secure_node_with_iptables)"
   echo "8. View deployment log (.elk_env)"
-  echo "9. Exit"
+  echo "9. Run Zeek deployment (zeek_deploy.sh)"
+  echo "10. Run Suricata deployment (suricata_deploy.sh)"
+  echo "11. Exit"
   echo
 
-  read -p "Select an option [1-9]: " CHOICE
+  read -p "Select an option [1-11]: " CHOICE
 
   case "$CHOICE" in
     1) run_full_setup ;;
@@ -135,10 +138,13 @@ main_menu() {
     6) clear; source "$SCRIPT_DIR/cleanup.sh"; log_step "CLEANUP_COMPLETE" "true"; pause_and_return_to_menu ;;
     7) run_firewall_hardening ;;
     8) view_env_file ;;
-    9) echo -e "${GREEN}Exiting setup. Goodbye!${NC}"; exit 0 ;;
+    9) clear; source "$SCRIPT_DIR/zeek_deploy.sh"; log_step "ZEEK_DEPLOYED" "true"; pause_and_return_to_menu ;;
+    10) clear; source "$SCRIPT_DIR/suricata_deploy.sh"; log_step "SURICATA_DEPLOYED" "true"; pause_and_return_to_menu ;;
+    11) echo -e "${GREEN}Exiting setup. Goodbye!${NC}"; exit 0 ;;
     *) echo -e "${RED}Invalid option. Please try again.${NC}"; sleep 2 ;;
   esac
 }
+
 
 # --- Main loop ---
 while true; do

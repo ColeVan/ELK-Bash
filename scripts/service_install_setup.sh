@@ -3,54 +3,82 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/functions.sh"
 
-# Update and install prerequisites with a progress bar
-echo -e "${YELLOW}Updating package lists and installing prerequisites...${NC}"
+# Load environment config (set earlier)
+ELK_ENV_FILE="$SCRIPT_DIR/.elk_env"
+if [[ -f "$ELK_ENV_FILE" ]]; then
+    source "$ELK_ENV_FILE"
+else
+    echo -e "${RED}❌ .elk_env file not found. Cannot determine AIRGAP_INSTALL or ELASTIC_VERSION.${NC}"
+    exit 1
+fi
 
-sudo apt-get update > /dev/null 2>&1
-sleep 2 & spinner "Running apt-get update."
+PACKAGES_DIR="$SCRIPT_DIR/packages"
 
-sudo apt-get install -y curl apt-transport-https unzip > /dev/null 2>&1
-sleep 2 & spinner "Running apt-get install for curl and unzip packages."
+if [[ "$AIRGAP_INSTALL" == "true" ]]; then
+    echo -e "${YELLOW}📦 Airgapped installation detected. Installing from local .deb packages in ${PACKAGES_DIR}...${NC}"
 
-# Display success message with color
-echo -e "${GREEN}Installation of needed components completed successfully in $elapsed_time seconds.${NC}"
+    if [[ ! -d "$PACKAGES_DIR" ]]; then
+        echo -e "${RED}❌ 'packages/' directory not found in $SCRIPT_DIR.${NC}"
+        echo -e "${YELLOW}Please create a 'packages' directory and place the following files inside it:${NC}"
+        echo -e "  - elasticsearch-${ELASTIC_VERSION}-amd64.deb"
+        echo -e "  - kibana-${ELASTIC_VERSION}-amd64.deb"
+        echo -e "  - logstash-${ELASTIC_VERSION}-amd64.deb"
+        exit 1
+    fi
 
-# Add Elastic APT repository
-echo -e "${BLUE}Adding Elastic APT repository...${NC}"
-{
-    curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
-    echo "deb https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list > /dev/null 2>&1
-	echo "deb https://artifacts.elastic.co/packages/9.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-9.x.list > /dev/null 2>&1
-} &
-sleep 2 & spinner "Adding repository"
+    for pkg in elasticsearch kibana logstash; do
+        DEB_FILE=$(find "$PACKAGES_DIR" -maxdepth 1 -type f -name "${pkg}-${ELASTIC_VERSION}-amd64.deb" | head -n 1)
+        if [[ -f "$DEB_FILE" ]]; then
+            echo -e "${BLUE}Installing $pkg from $DEB_FILE...${NC}"
+            sudo dpkg -i "$DEB_FILE" > /dev/null 2>&1
+            sleep 2 & spinner "Installing $pkg"
+            echo -e "${GREEN}✔ $pkg installed successfully from .deb package.${NC}"
+        else
+            echo -e "${RED}❌ Missing package: ${pkg}-${ELASTIC_VERSION}-amd64.deb in '$PACKAGES_DIR'.${NC}"
+            exit 1
+        fi
+    done
 
-echo -e "${GREEN}✔ Repository added successfully.${NC}"
+else
+    # Continue with non-airgapped logic (APT repo, etc.)
+    echo -e "${YELLOW}🌐 Non-airgapped installation detected. Installing from APT repository...${NC}"
 
-# Install Elasticsearch
-sudo apt-get update > /dev/null 2>&1
-sleep 2 & spinner "Updating package lists"
-sudo apt-get install -y "elasticsearch=$ELASTIC_VERSION" > /dev/null 2>&1
-sleep 2 & spinner "Installing Elasticsearch version $ELASTIC_VERSION"
-echo -e "${GREEN}✔ Elasticsearch installation completed successfully.${NC}"
+    echo -e "${YELLOW}Updating package lists and installing prerequisites...${NC}"
+    sudo apt-get update > /dev/null 2>&1
+    sleep 2 & spinner "Running apt-get update"
 
-# Elasticsearch
+    sudo apt-get install -y curl apt-transport-https unzip > /dev/null 2>&1
+    sleep 2 & spinner "Installing curl and unzip"
+
+    echo -e "${GREEN}✔ Prerequisites installed.${NC}"
+
+    echo -e "${BLUE}Adding Elastic APT repositories...${NC}"
+    {
+        curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
+        echo "deb https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list > /dev/null 2>&1
+        echo "deb https://artifacts.elastic.co/packages/9.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-9.x.list > /dev/null 2>&1
+    } &
+    sleep 2 & spinner "Adding Elastic APT repository"
+    echo -e "${GREEN}✔ Repository added.${NC}"
+
+    for component in elasticsearch kibana; do
+        sudo apt-get update > /dev/null 2>&1
+        sleep 2 & spinner "Updating package lists for $component"
+        sudo apt-get install -y "$component=$ELASTIC_VERSION" > /dev/null 2>&1
+        sleep 2 & spinner "Installing $component $ELASTIC_VERSION"
+        echo -e "${GREEN}✔ $component $ELASTIC_VERSION installed via APT.${NC}"
+    done
+
+    sudo apt-get install -y logstash > /dev/null 2>&1
+    sleep 2 & spinner "Installing Logstash"
+    echo -e "${GREEN}✔ Logstash installed via APT.${NC}"
+fi
+
+# Apply Elasticsearch template (only applicable post-install)
 apply_template "elk_templates/elasticsearch.yml.tpl" "/etc/elasticsearch/elasticsearch.yml"
 sanitize_line_endings "/etc/elasticsearch/elasticsearch.yml"
 sleep 2 & spinner
-echo -e "${GREEN}✔ Elasticsearch configuration completed successfully.${NC}"
-
-# Install Kibana
-sudo apt-get update > /dev/null 2>&1
-sleep 2 & spinner "Updating package lists"
-sudo apt-get install -y "kibana=$ELASTIC_VERSION" > /dev/null 2>&1
-sleep 2 & spinner "Installing Kibana version $ELASTIC_VERSION"
-echo -e "${GREEN}✔ Kibana installation completed successfully.${NC}"
-
-# Install Logstash
-sudo apt-get update > /dev/null 2>&1
-sleep 2 & spinner "Updating package lists"
-sudo apt-get install -y logstash > /dev/null 2>&1
-sleep 2 & spinner "Installing Logstash"
+echo -e "${GREEN}✔ Elasticsearch configuration applied.${NC}"
 
 echo -e "${GREEN}🚀 All components installed and configured successfully! 🎉${NC}"
 

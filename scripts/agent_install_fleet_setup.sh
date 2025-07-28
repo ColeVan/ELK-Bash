@@ -2,35 +2,106 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/functions.sh"
-# --- Download Linux Elastic Agent for Fleet Server Setup ---
-echo -e "\n${GREEN}Downloading Elastic Agent for Fleet Server setup... please wait.${NC}"
-sleep 5 & spinner
 
-ELASTIC_AGENT_URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-${ELASTIC_VERSION}-linux-x86_64.tar.gz"
-ELASTIC_AGENT_FILE="elastic-agent-${ELASTIC_VERSION}-linux-x86_64.tar.gz"
-USER_HOME=$(eval echo ~"$SUDO_USER")
-DEST_DIR="$USER_HOME"
-DEST_PATH="$DEST_DIR/$ELASTIC_AGENT_FILE"
+PACKAGES_DIR="$SCRIPT_DIR/packages"
+mkdir -p "$PACKAGES_DIR"
 
+# Helper: extract version from tar filename
+extract_version_from_filename() {
+    local filename="$1"
+    echo "$filename" | sed -n 's/elastic-agent-\(.*\)-linux-x86_64\.tar\.gz/\1/p'
+}
 
-# Download Elastic Agent with curl and built-in progress bar
-echo -e "${CYAN}Downloading: ${ELASTIC_AGENT_FILE}${NC}"
-curl -L --progress-bar -o "$DEST_PATH" "$ELASTIC_AGENT_URL"
+if [[ "$AIRGAP_INSTALL" == "true" ]]; then
+  echo -e "${YELLOW}📦 Airgapped mode enabled. Searching for Elastic Agent tarball in: ${PACKAGES_DIR}${NC}"
 
-if [ $? -eq 0 ]; then
-  echo -e "${GREEN}✔ Download completed successfully.${NC}"
+  FOUND_TAR=$(find "$PACKAGES_DIR" -maxdepth 1 -name "elastic-agent-*-linux-x86_64.tar.gz" | head -n 1)
+
+  if [[ ! -f "$FOUND_TAR" ]]; then
+    echo -e "${RED}❌ Elastic Agent tarball not found in ${PACKAGES_DIR}${NC}"
+    exit 1
+  fi
+
+  AGENT_FILENAME=$(basename "$FOUND_TAR")
+  AGENT_VERSION=$(extract_version_from_filename "$AGENT_FILENAME")
+  AGENT_SHA_PATH="${PACKAGES_DIR}/${AGENT_FILENAME}.sha512"
+
+  if [[ "$AGENT_VERSION" != "$ELASTIC_VERSION" ]]; then
+    echo -e "${YELLOW}⚠️ Version mismatch detected between Elastic Stack and Agent package:${NC}"
+    echo -e "  ${CYAN}ELASTIC_VERSION=${ELASTIC_VERSION}${NC}"
+    echo -e "  ${CYAN}AGENT_VERSION=${AGENT_VERSION}${NC}"
+
+    read -rp "$(echo -e "${YELLOW}Continue using agent version ${AGENT_VERSION} for installation? (y/n): ${NC}")" PROCEED_ANYWAY
+    if [[ ! "$PROCEED_ANYWAY" =~ ^[Yy]$ ]]; then
+      echo -e "${RED}❌ Aborted by user due to version mismatch.${NC}"
+      exit 1
+    fi
+  fi
+
+  if [[ ! -f "$AGENT_SHA_PATH" ]]; then
+    echo -e "${YELLOW}⚠️ Checksum file missing. Generating SHA512 manually...${NC}"
+    GENERATED_SHA=$(sha512sum "$FOUND_TAR")
+    echo "$GENERATED_SHA" | tee -a "$PACKAGES_DIR/checksums.txt"
+    echo -e "${CYAN}✔ SHA512 hash for reference:${NC}\n$GENERATED_SHA"
+  else
+    echo -e "${CYAN}Validating SHA512 checksum...${NC}"
+    (cd "$PACKAGES_DIR" && sha512sum -c "$(basename "$AGENT_SHA_PATH")" 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+      echo -e "${RED}❌ Checksum validation failed for ${AGENT_FILENAME}${NC}"
+      exit 1
+    else
+      echo -e "${GREEN}✔ Checksum passed.${NC}"
+    fi
+  fi
+
 else
-  echo -e "${RED}✘ Download failed. Please check your internet connection and try again.${NC}"
-  exit 1
+  echo -e "${GREEN}🌐 Downloading Elastic Agent ${ELASTIC_VERSION} to: ${PACKAGES_DIR}${NC}"
+  sleep 3 & spinner
+
+  AGENT_VERSION="$ELASTIC_VERSION"
+  AGENT_FILENAME="elastic-agent-${AGENT_VERSION}-linux-x86_64.tar.gz"
+  AGENT_SHA_FILENAME="${AGENT_FILENAME}.sha512"
+  AGENT_PATH="$PACKAGES_DIR/$AGENT_FILENAME"
+  AGENT_SHA_PATH="$PACKAGES_DIR/$AGENT_SHA_FILENAME"
+  AGENT_URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/${AGENT_FILENAME}"
+  AGENT_SHA_URL="${AGENT_URL}.sha512"
+
+  curl -L --progress-bar -o "$AGENT_PATH" "$AGENT_URL"
+  curl -s -o "$AGENT_SHA_PATH" "$AGENT_SHA_URL"
+
+  if [[ ! -f "$AGENT_PATH" || ! -f "$AGENT_SHA_PATH" ]]; then
+    echo -e "${RED}❌ Failed to download Elastic Agent or checksum.${NC}"
+    exit 1
+  fi
+
+  echo -e "${CYAN}Validating SHA512 checksum...${NC}"
+  (cd "$PACKAGES_DIR" && sha512sum -c "$AGENT_SHA_FILENAME" 2>/dev/null)
+  if [[ $? -ne 0 ]]; then
+    echo -e "${RED}❌ Checksum validation failed for ${AGENT_FILENAME}${NC}"
+    exit 1
+  else
+    echo -e "${GREEN}✔ Checksum passed.${NC}"
+  fi
 fi
 
-# Extract archive with spinner_agent_download
-echo -e "${CYAN}Extracting Elastic Agent archive...${NC}"
+# ✅ Extract Agent
+echo -e "${CYAN}Extracting Elastic Agent...${NC}"
+AGENT_DIR="$PACKAGES_DIR/elastic-agent-${AGENT_VERSION}-linux-x86_64"
+
 (
-  tar -xzf "$DEST_PATH" -C "$DEST_DIR"
+  tar -xzf "$PACKAGES_DIR/$AGENT_FILENAME" -C "$PACKAGES_DIR"
 ) & spinner_agent_download "Extracting"
 
-echo -e "${GREEN}✔ Elastic Agent ready at: ${DEST_DIR}/elastic-agent-${ELASTIC_VERSION}-linux-x86_64${NC}"
+if [[ -d "$AGENT_DIR" ]]; then
+  cd "$AGENT_DIR" || {
+    echo -e "${RED}❌ Could not enter agent directory: $AGENT_DIR${NC}"
+    exit 1
+  }
+  echo -e "${GREEN}✔ Ready to install agent from: $AGENT_DIR${NC}"
+else
+  echo -e "${RED}❌ Extracted agent directory not found: $AGENT_DIR${NC}"
+  exit 1
+fi
 
 # Create Fleet Policy
 fleet_policy_id=$(curl --request POST \

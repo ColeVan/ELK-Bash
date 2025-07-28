@@ -401,3 +401,118 @@ pause_and_return_to_menu() {
   read
 }
 
+uninstall_and_cleanup_zeek() {
+    echo -e "${GREEN}🔍 Checking for existing Zeek installation...${NC}"
+    local found=false
+
+    # Check for systemd-managed Zeek service
+    if systemctl list-units --type=service | grep -q 'zeek.service'; then
+        echo -e "${YELLOW}⚠️  Zeek systemd service is active.${NC}"
+        found=true
+    fi
+
+    # Check for zeekctl binary
+    if command -v zeekctl &>/dev/null; then
+        if zeekctl status 2>/dev/null | grep -qi 'running'; then
+            echo -e "${YELLOW}⚠️  Zeek appears to be running via zeekctl.${NC}"
+            found=true
+        fi
+    fi
+
+    # Check if /opt/zeek exists (APT install)
+    if [[ -d "/opt/zeek" ]]; then
+        echo -e "${YELLOW}⚠️  Zeek installation detected in /opt/zeek (APT).${NC}"
+        found=true
+    fi
+
+    # Check if /usr/local/zeek exists (source install)
+    if [[ -d "/usr/local/zeek" ]]; then
+        echo -e "${YELLOW}⚠️  Zeek installation detected in /usr/local/zeek (source).${NC}"
+        found=true
+    fi
+
+    if [[ "$found" == false ]]; then
+        echo -e "${GREEN}✅ No active Zeek installation found.${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}⚠️  A previous Zeek installation has been detected.${NC}"
+    read -rp "$(echo -e "${YELLOW}Would you like to uninstall and remove all related files? (yes/no): ${NC}")" CLEANUP_CONFIRM
+    if [[ ! "$CLEANUP_CONFIRM" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        echo -e "${YELLOW}⏭ Skipping Zeek cleanup.${NC}"
+        return 0
+    fi
+
+    # Stop Zeek via zeekctl if available
+    if command -v zeekctl &>/dev/null; then
+        echo -e "${CYAN}⛔ Stopping Zeek via zeekctl...${NC}"
+        zeekctl stop || echo -e "${YELLOW}⚠️  Could not stop Zeek with zeekctl.${NC}"
+    fi
+
+    # Stop and disable Zeek systemd service if present
+    if systemctl list-units --type=service | grep -q 'zeek.service'; then
+        echo -e "${CYAN}🛑 Disabling Zeek systemd service...${NC}"
+        sudo systemctl stop zeek.service
+        sudo systemctl disable zeek.service
+        sudo rm -f /etc/systemd/system/zeek.service
+        sudo systemctl daemon-reload
+    fi
+
+    echo -e "${RED}🧹 Removing Zeek binaries, configs, and logs...${NC}"
+
+    # Remove source install files
+    sudo rm -rf /usr/local/zeek /usr/local/bin/zeek* 2>/dev/null
+
+    # Remove APT install files
+    sudo apt purge -y zeek zeek-core zeekctl 2>/dev/null
+    sudo rm -rf /opt/zeek /usr/bin/zeek /usr/share/zeek 2>/dev/null
+
+    # Remove logs if still present
+    sudo rm -rf /usr/local/zeek/logs /opt/zeek/logs /usr/local/zeek/spool /opt/zeek/spool 2>/dev/null
+
+    # Clean up PATH export from bashrc
+    sed -i '/\/opt\/zeek\/bin/d' ~/.bashrc
+    sed -i '/\/usr\/local\/zeek\/bin/d' ~/.bashrc
+
+    echo -e "${GREEN}✅ Zeek uninstalled and cleaned up.${NC}"
+}
+
+
+# Function to uninstall Suricata cleanly
+uninstall_and_cleanup_suricata() {
+  echo -e "${CYAN}🔍 Checking for existing Suricata installation...${NC}"
+
+  if command -v suricata &>/dev/null || systemctl list-units --type=service | grep -q 'suricata'; then
+    echo -e "${YELLOW}⚠️  Suricata is already installed.${NC}"
+    read -rp "$(echo -e "${YELLOW}Do you want to remove the old installation and clean logs/configs? (yes/no): ${NC}")" CLEAN_CONFIRM
+
+    if [[ "$CLEAN_CONFIRM" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+      echo -e "${CYAN}🛑 Stopping Suricata service...${NC}"
+      sudo systemctl stop suricata 2>/dev/null
+      sudo systemctl disable suricata 2>/dev/null
+
+      echo -e "${CYAN}🧹 Removing Suricata binaries and configs...${NC}"
+      sudo apt-get remove --purge -y suricata
+      sudo rm -rf /etc/suricata /var/lib/suricata
+
+      echo -e "${CYAN}🧹 Cleaning Suricata logs from /var/log/suricata...${NC}"
+      if [[ -d /var/log/suricata ]]; then
+        sudo find /var/log/suricata -type f -name "*.log" -delete
+        sudo find /var/log/suricata -type f -name "*.pcap" -delete
+        sudo rm -rf /var/log/suricata/*  # extra safety wipe
+      fi
+
+      sudo systemctl daemon-reexec
+      sudo systemctl daemon-reload
+
+      echo -e "${GREEN}✅ Old Suricata installation and logs removed.${NC}"
+    else
+      echo -e "${YELLOW}⏭ Skipping Suricata cleanup.${NC}"
+    fi
+  else
+    echo -e "${GREEN}✅ No existing Suricata installation found.${NC}"
+  fi
+}
+
+
+

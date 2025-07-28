@@ -504,20 +504,3 @@ fi
 ROOT_FS_USAGE=$(df -h / | awk '/\/$/ {printf "Size: %s Used: %s Avail: %s Use%%: %s",$2,$3,$4,$5}')
 # Add to summary table
 add_to_summary_table "Root Disk Usage" "$ROOT_FS_USAGE"
-
-
-# Prompt in a loop until valid version is entered
-while true; do
-    read -p "$(echo -e "${GREEN}Enter the Elastic Stack version to install ${YELLOW}(e.g., 8.18.2 or 9.0.2)${GREEN}: ${NC}")" ELASTIC_VERSION
-    if validate_version "$ELASTIC_VERSION"; then
-        echo -e "${GREEN}✔ Version '${ELASTIC_VERSION}' is valid and has been accepted.${NC}"
-        add_to_summary_table "Elastic Stack Version" "$ELASTIC_VERSION"
-        break
-    else
-        echo -e "${RED}❌ Invalid version format. Please enter something like 8.18.2.${NC}"
-    fi
-done
-
-# Final table
-echo -e "\n${GREEN}Summary of your configuration:${NC}"
-print_summary_table

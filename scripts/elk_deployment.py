@@ -3,6 +3,7 @@
 import subprocess
 import os
 import shutil
+import time
 
 SESSION = "elk_monitor"
 ORCHESTRATE = "./orchestrate.sh"
@@ -23,7 +24,10 @@ subprocess.run([
     "tmux", "-2", "new-session", "-d", "-s", SESSION, "-n", "Main"
 ])
 
-# Split horizontally → pane 0 (L) + pane 1 (R)
+# ✅ Prevent race conditions with a short pause
+time.sleep(1)
+
+# Now safe to begin splitting panes
 subprocess.run([
     "tmux", "split-window", "-h", "-t", f"{SESSION}:0.0"
 ])
