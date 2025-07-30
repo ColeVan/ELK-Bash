@@ -514,5 +514,63 @@ uninstall_and_cleanup_suricata() {
   fi
 }
 
+# Helper: extract version from tar filename
+extract_version_from_filename() {
+    local filename="$1"
+    echo "$filename" | sed -n 's/elastic-agent-\(.*\)-linux-x86_64\.tar\.gz/\1/p'
+}
+
+download_agent() {
+    local version="$1"
+    AGENT_FILENAME="elastic-agent-${version}-linux-x86_64.tar.gz"
+    AGENT_SHA_FILENAME="${AGENT_FILENAME}.sha512"
+    AGENT_PATH="$PACKAGES_DIR/$AGENT_FILENAME"
+    AGENT_SHA_PATH="$PACKAGES_DIR/$AGENT_SHA_FILENAME"
+    AGENT_URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/${AGENT_FILENAME}"
+    AGENT_SHA_URL="${AGENT_URL}.sha512"
+
+    # Skip download if already exists
+    if [[ -f "$AGENT_PATH" ]]; then
+        echo -e "${GREEN}✔ Found existing agent tarball: $AGENT_FILENAME. Skipping download.${NC}"
+    else
+        echo -e "${BLUE}⬇ Downloading Elastic Agent $version...${NC}"
+        curl -L --progress-bar -o "$AGENT_PATH" "$AGENT_URL"
+        curl -s -o "$AGENT_SHA_PATH" "$AGENT_SHA_URL"
+    fi
+
+    # Checksum validation
+    if [[ ! -s "$AGENT_SHA_PATH" ]]; then
+        echo -e "${YELLOW}⚠️ No checksum file found. Generating SHA512 manually...${NC}"
+        GENERATED_SHA=$(sha512sum "$AGENT_PATH")
+        echo "$GENERATED_SHA" | tee -a "$PACKAGES_DIR/checksums.txt"
+    else
+        echo -e "${CYAN}Validating SHA512 checksum...${NC}"
+        if (cd "$PACKAGES_DIR" && sha512sum -c "$AGENT_SHA_FILENAME" 2>/dev/null); then
+            echo -e "${GREEN}✔ Checksum passed.${NC}"
+        else
+            echo -e "${RED}❌ Checksum validation failed for $AGENT_FILENAME. Continuing without strict validation.${NC}"
+        fi
+    fi
+}
+
+extract_agent() {
+    echo -e "${CYAN}Extracting Elastic Agent...${NC}"
+    AGENT_DIR="$PACKAGES_DIR/elastic-agent-${AGENT_VERSION}-linux-x86_64"
+
+    (
+        tar -xzf "$PACKAGES_DIR/$AGENT_FILENAME" -C "$PACKAGES_DIR"
+    ) & spinner_agent_download "Extracting"
+
+    if [[ -d "$AGENT_DIR" ]]; then
+        cd "$AGENT_DIR" || {
+            echo -e "${RED}❌ Could not enter agent directory: $AGENT_DIR${NC}"
+            exit 1
+        }
+        echo -e "${GREEN}✔ Ready to install agent from: $AGENT_DIR${NC}"
+    else
+        echo -e "${RED}❌ Extracted agent directory not found: $AGENT_DIR${NC}"
+        exit 1
+    fi
+}
 
 

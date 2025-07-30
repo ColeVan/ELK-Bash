@@ -295,7 +295,6 @@ done
 
 
 # === Common IP Prompt and Assignment ===
-
 echo -e "\n${GREEN}Elasticsearch, Logstash, and Kibana will be hosted using the IP you enter below.${NC}"
 
 echo -e "${GREEN}--- Network Interfaces ---${NC}"

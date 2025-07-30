@@ -6,104 +6,40 @@ source "$SCRIPT_DIR/functions.sh"
 PACKAGES_DIR="$SCRIPT_DIR/packages"
 mkdir -p "$PACKAGES_DIR"
 
-# Helper: extract version from tar filename
-extract_version_from_filename() {
-    local filename="$1"
-    echo "$filename" | sed -n 's/elastic-agent-\(.*\)-linux-x86_64\.tar\.gz/\1/p'
-}
+# --- Main Logic ---
 
 if [[ "$AIRGAP_INSTALL" == "true" ]]; then
-  echo -e "${YELLOW}📦 Airgapped mode enabled. Searching for Elastic Agent tarball in: ${PACKAGES_DIR}${NC}"
+    echo -e "${YELLOW}📦 Airgapped mode enabled. Searching for Elastic Agent tarball in: ${PACKAGES_DIR}${NC}"
 
-  FOUND_TAR=$(find "$PACKAGES_DIR" -maxdepth 1 -name "elastic-agent-*-linux-x86_64.tar.gz" | head -n 1)
+    FOUND_TAR=$(find "$PACKAGES_DIR" -maxdepth 1 -name "elastic-agent-*-linux-x86_64.tar.gz" | head -n 1)
 
-  if [[ ! -f "$FOUND_TAR" ]]; then
-    echo -e "${RED}❌ Elastic Agent tarball not found in ${PACKAGES_DIR}${NC}"
-    exit 1
-  fi
+    if [[ ! -f "$FOUND_TAR" ]]; then
+        echo -e "${RED}❌ Elastic Agent tarball not found.${NC}"
+        read -rp "$(echo -e "${YELLOW}Download tarball via curl now? [y/N]: ${NC}")" download_choice
 
-  AGENT_FILENAME=$(basename "$FOUND_TAR")
-  AGENT_VERSION=$(extract_version_from_filename "$AGENT_FILENAME")
-  AGENT_SHA_PATH="${PACKAGES_DIR}/${AGENT_FILENAME}.sha512"
-
-  if [[ "$AGENT_VERSION" != "$ELASTIC_VERSION" ]]; then
-    echo -e "${YELLOW}⚠️ Version mismatch detected between Elastic Stack and Agent package:${NC}"
-    echo -e "  ${CYAN}ELASTIC_VERSION=${ELASTIC_VERSION}${NC}"
-    echo -e "  ${CYAN}AGENT_VERSION=${AGENT_VERSION}${NC}"
-
-    read -rp "$(echo -e "${YELLOW}Continue using agent version ${AGENT_VERSION} for installation? (y/n): ${NC}")" PROCEED_ANYWAY
-    if [[ ! "$PROCEED_ANYWAY" =~ ^[Yy]$ ]]; then
-      echo -e "${RED}❌ Aborted by user due to version mismatch.${NC}"
-      exit 1
-    fi
-  fi
-
-  if [[ ! -f "$AGENT_SHA_PATH" ]]; then
-    echo -e "${YELLOW}⚠️ Checksum file missing. Generating SHA512 manually...${NC}"
-    GENERATED_SHA=$(sha512sum "$FOUND_TAR")
-    echo "$GENERATED_SHA" | tee -a "$PACKAGES_DIR/checksums.txt"
-    echo -e "${CYAN}✔ SHA512 hash for reference:${NC}\n$GENERATED_SHA"
-  else
-    echo -e "${CYAN}Validating SHA512 checksum...${NC}"
-    (cd "$PACKAGES_DIR" && sha512sum -c "$(basename "$AGENT_SHA_PATH")" 2>/dev/null)
-    if [[ $? -ne 0 ]]; then
-      echo -e "${RED}❌ Checksum validation failed for ${AGENT_FILENAME}${NC}"
-      exit 1
+        if [[ "$download_choice" =~ ^[Yy]$ ]]; then
+            read -rp "$(echo -e "${YELLOW}Enter Elastic Agent version (e.g., 9.1.0): ${NC}")" AGENT_VERSION
+            download_agent "$AGENT_VERSION"
+        else
+            echo -e "${RED}❌ Cannot continue without tarball. Exiting.${NC}"
+            exit 1
+        fi
     else
-      echo -e "${GREEN}✔ Checksum passed.${NC}"
+        AGENT_FILENAME=$(basename "$FOUND_TAR")
+        AGENT_VERSION=$(extract_version_from_filename "$AGENT_FILENAME")
+        echo -e "${GREEN}✔ Found existing tarball: $AGENT_FILENAME${NC}"
     fi
-  fi
-
 else
-  echo -e "${GREEN}🌐 Downloading Elastic Agent ${ELASTIC_VERSION} to: ${PACKAGES_DIR}${NC}"
-  sleep 3 & spinner
-
-  AGENT_VERSION="$ELASTIC_VERSION"
-  AGENT_FILENAME="elastic-agent-${AGENT_VERSION}-linux-x86_64.tar.gz"
-  AGENT_SHA_FILENAME="${AGENT_FILENAME}.sha512"
-  AGENT_PATH="$PACKAGES_DIR/$AGENT_FILENAME"
-  AGENT_SHA_PATH="$PACKAGES_DIR/$AGENT_SHA_FILENAME"
-  AGENT_URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/${AGENT_FILENAME}"
-  AGENT_SHA_URL="${AGENT_URL}.sha512"
-
-  curl -L --progress-bar -o "$AGENT_PATH" "$AGENT_URL"
-  curl -s -o "$AGENT_SHA_PATH" "$AGENT_SHA_URL"
-
-  if [[ ! -f "$AGENT_PATH" || ! -f "$AGENT_SHA_PATH" ]]; then
-    echo -e "${RED}❌ Failed to download Elastic Agent or checksum.${NC}"
-    exit 1
-  fi
-
-  echo -e "${CYAN}Validating SHA512 checksum...${NC}"
-  (cd "$PACKAGES_DIR" && sha512sum -c "$AGENT_SHA_FILENAME" 2>/dev/null)
-  if [[ $? -ne 0 ]]; then
-    echo -e "${RED}❌ Checksum validation failed for ${AGENT_FILENAME}${NC}"
-    exit 1
-  else
-    echo -e "${GREEN}✔ Checksum passed.${NC}"
-  fi
+    echo -e "${GREEN}🌐 Online installation: Downloading Elastic Agent...${NC}"
+    read -rp "$(echo -e "${YELLOW}Enter Elastic Agent version (e.g., 9.1.0): ${NC}")" AGENT_VERSION
+    download_agent "$AGENT_VERSION"
 fi
 
-# ✅ Extract Agent
-echo -e "${CYAN}Extracting Elastic Agent...${NC}"
-AGENT_DIR="$PACKAGES_DIR/elastic-agent-${AGENT_VERSION}-linux-x86_64"
+# --- 1. Extraction ---
+extract_agent  # This extracts to $PACKAGES_DIR/elastic-agent-${AGENT_VERSION}-linux-x86_64
 
-(
-  tar -xzf "$PACKAGES_DIR/$AGENT_FILENAME" -C "$PACKAGES_DIR"
-) & spinner_agent_download "Extracting"
-
-if [[ -d "$AGENT_DIR" ]]; then
-  cd "$AGENT_DIR" || {
-    echo -e "${RED}❌ Could not enter agent directory: $AGENT_DIR${NC}"
-    exit 1
-  }
-  echo -e "${GREEN}✔ Ready to install agent from: $AGENT_DIR${NC}"
-else
-  echo -e "${RED}❌ Extracted agent directory not found: $AGENT_DIR${NC}"
-  exit 1
-fi
-
-# Create Fleet Policy
+# --- 2. Create Fleet Policy ---
+echo -e "${BLUE}Creating Fleet Policy...${NC}"
 fleet_policy_id=$(curl --request POST \
   --url "https://${ELASTIC_HOST}:5601/api/fleet/agent_policies?sys_monitoring=true" \
   --header 'Accept: */*' \
@@ -116,21 +52,15 @@ fleet_policy_id=$(curl --request POST \
   "name": "fleet-server-policy",
   "description": "",
   "namespace": "default",
-  "monitoring_enabled": [
-    "logs",
-    "metrics"
-  ],
-  "has_fleet_server": "true"
+  "monitoring_enabled": ["logs", "metrics"],
+  "has_fleet_server": true
 }' --insecure)
 
-echo $fleet_policy_id
-
-# Output the fleet policy ID
-echo -e "${YELLOW}Fleet Policy ID: $fleet_policy_id...${NC}"
+echo -e "${YELLOW}Fleet Policy Created. Response:${NC} $fleet_policy_id"
 sleep 5 & spinner
 
-# Create Fleet Server Host on https://elastic_ip:8220
-echo -e "${RED}Creating Fleet Server Host via Elastic API..${NC}"
+# --- 3. Create Fleet Server Host ---
+echo -e "${BLUE}Creating Fleet Server Host...${NC}"
 fleet_server_host=$(curl --request POST \
   --url "https://${ELASTIC_HOST}:5601/api/fleet/fleet_server_hosts" \
   --header 'Accept: */*' \
@@ -141,40 +71,32 @@ fleet_server_host=$(curl --request POST \
   --header 'kbn-xsrf: xxx' \
   --data "{\"name\":\"Default\",\"host_urls\":[\"https://${ELASTIC_HOST}:8220\"],\"is_default\":true}" \
   --insecure)
-  
-# Output the Fleet Server Host response
-echo -e "${YELLOW}Fleet Server Host Response: $fleet_server_host.${NC}"
+
+echo -e "${YELLOW}Fleet Server Host Response:${NC} $fleet_server_host"
 sleep 10 & spinner
 
-# Determine the actual user’s home directory in a cross-platform-safe way
-if [ -n "$SUDO_USER" ]; then
-    USER_HOME=$(eval echo "~$SUDO_USER")
-else
-    USER_HOME="$HOME"
-fi
+# --- 4. Install Elastic Agent ---
+# Use the extracted directory from PACKAGES_DIR
+AGENT_EXTRACTED_DIR="$PACKAGES_DIR/elastic-agent-${AGENT_VERSION}-linux-x86_64"
 
-# Construct the Elastic Agent directory path
-ELASTIC_AGENT_DIR="elastic-agent-${ELASTIC_VERSION}-linux-x86_64"
-AGENT_PATH="${USER_HOME}/${ELASTIC_AGENT_DIR}"
-
-# Safely change to the directory if it exists
-if [ -d "$AGENT_PATH" ]; then
-    cd "$AGENT_PATH" || {
-        echo -e "${RED}Failed to enter Elastic Agent directory: $AGENT_PATH${NC}"
+if [[ -d "$AGENT_EXTRACTED_DIR" ]]; then
+    cd "$AGENT_EXTRACTED_DIR" || {
+        echo -e "${RED}❌ Could not enter directory: $AGENT_EXTRACTED_DIR${NC}"
         exit 1
     }
-    echo -e "${GREEN}Changed to Elastic Agent directory: $AGENT_PATH${NC}"
+    echo -e "${GREEN}✔ Using extracted Elastic Agent directory: $AGENT_EXTRACTED_DIR${NC}"
 else
-    echo -e "${YELLOW}Elastic Agent directory not found: $AGENT_PATH. Skipping...${NC}"
+    echo -e "${RED}❌ Extracted Elastic Agent directory not found. Exiting.${NC}"
+    exit 1
 fi
 
-# Install the Elastic Agent with the specified options
-echo -e "${GREEN}$SERVICE_NAME_TOKEN${NC}"
+# Install agent with Fleet server options
+echo -e "${GREEN}🔑 Using Service Token:${NC} $SERVICE_NAME_TOKEN"
 sudo yes | sudo ./elastic-agent install \
   --url=https://${ELASTIC_HOST}:8220 \
   --fleet-server-es=https://${ELASTIC_HOST}:9200 \
-  --fleet-server-service-token=$SERVICE_NAME_TOKEN \
-  --fleet-server-policy=fleet-server-policy \
+  --fleet-server-service-token="$SERVICE_NAME_TOKEN" \
+  --fleet-server-policy="fleet-server-policy" \
   --fleet-server-es-ca=/usr/share/elasticsearch/ssl/ca/ca.crt \
   --certificate-authorities=/usr/share/elasticsearch/ssl/ca/ca.crt \
   --fleet-server-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt \
@@ -185,15 +107,13 @@ sudo yes | sudo ./elastic-agent install \
   --fleet-server-es-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt \
   --fleet-server-es-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key \
   --fleet-server-es-insecure
-  
-# Confirm installation success
-if [ $? -eq 0 ]; then
-  echo -e "
-${GREEN}Elastic Agent installed successfully.${NC}"
 
+# --- 5. Confirm Installation ---
+if [[ $? -eq 0 ]]; then
+    echo -e "${GREEN}✔ Elastic Agent installed successfully.${NC}"
 else
-  echo -e "${RED}Elastic Agent installation failed.${NC}"
-  exit 1
+    echo -e "${RED}❌ Elastic Agent installation failed.${NC}"
+    exit 1
 fi
 
 # Wait for 10 seconds while creating windows policy
