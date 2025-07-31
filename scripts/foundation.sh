@@ -328,10 +328,9 @@ LOGSTASH_HOST=$COMMON_IP
 # Add to summary table
 add_to_summary_table "Management IP" "$COMMON_IP"
 
-
 # Ask if this is an airgapped environment
-echo -e "\n${YELLOW}Is this machine in an airgapped (offline) environment?${NC}"
-prompt_input "Type \"yes\" to skip internet check, or \"no\" to verify connectivity: " IS_airgapped
+echo -e "\n${GREEN}Is this machine in an airgapped (offline) environment?${NC}"
+prompt_input "$(echo -e "${GREEN}Type ${YELLOW}\"yes\"${GREEN} to skip internet check, or ${YELLOW}\"no\"${GREEN} to verify connectivity: ${NC}")" IS_airgapped
 
 if [[ "$IS_airgapped" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
 	echo -e "${YELLOW}airgapped mode confirmed. Skipping internet connectivity check.${NC}"
@@ -379,10 +378,10 @@ fi
 
 if [[ "$DEPLOYMENT_TYPE" == "Cluster" ]]; then
     while true; do
-        read -p "$(echo -e "${GREEN}How many additional Elasticsearch nodes will be added to this node for clustering?: ${NC}")" NODE_INPUT
+        read -p "$(echo -e "${GREEN}How many additional Elasticsearch nodes will be added to this node for clustering? ${YELLOW}(enter a number)${GREEN}: ${NC}")" NODE_INPUT
         if [[ "$NODE_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             NODE_COUNT=$NODE_INPUT
-            echo -e "${GREEN}✔ Cluster will include $NODE_COUNT additional node(s).${NC}"
+            echo -e "${GREEN}✔ Cluster will include ${YELLOW}$NODE_COUNT${GREEN} additional node(s).${NC}"
             add_to_summary_table "Additional Nodes" "$NODE_COUNT"
             break
         else
@@ -417,12 +416,13 @@ done
 while true; do
   prompt_input "Enter the superuser username for Kibana webUI access and Elasticsearch interactions: " USERNAME
 
-  if validate_username "$USERNAME"; then
-    echo -e "${GREEN}✔ Accepted username/email: $USERNAME${NC}"
+  # ✅ Only allow alphanumeric and underscores, no @ signs or emails
+  if [[ "$USERNAME" =~ ^[a-zA-Z0-9_]+$ ]]; then
+    echo -e "${GREEN}✔ Accepted username: $USERNAME${NC}"
     add_to_summary_table "Admin Username" "$USERNAME"
     break
   else
-    echo -e "${RED}❌ Please enter a valid username or email address.${NC}"
+    echo -e "${RED}❌ Invalid username. Only letters, numbers, and underscores are allowed (no @ signs).${NC}"
   fi
 done
 

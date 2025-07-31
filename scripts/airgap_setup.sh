@@ -6,16 +6,8 @@ source "$SCRIPT_DIR/functions.sh"
 PACKAGES_DIR="$SCRIPT_DIR/packages"
 mkdir -p "$PACKAGES_DIR"
 
-# Trap Ctrl+C and return to menu
 trap 'echo -e "\n${YELLOW}⚠️ Setup interrupted by user. Returning to main menu...${NC}"; pause_and_return_to_menu' SIGINT
 trap - SIGINT
-
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/functions.sh"
-
-PACKAGES_DIR="$SCRIPT_DIR/packages"
-mkdir -p "$PACKAGES_DIR"
 
 # Find existing packages
 ES_DEB=$(find "$PACKAGES_DIR" -maxdepth 1 -type f -name "elasticsearch-*-amd64.deb" | head -n 1)
@@ -46,9 +38,7 @@ if (( ${#MISSING_PKGS[@]} > 0 )); then
         echo -e "${RED}❌ Cannot continue without required .deb packages. Exiting.${NC}"
         exit 1
     fi
-
 else
-    # All packages found → detect version
     ES_VERSION=$(basename "$ES_DEB" | sed -n 's/elasticsearch-\(.*\)-amd64\.deb/\1/p')
     KB_VERSION=$(basename "$KB_DEB" | sed -n 's/kibana-\(.*\)-amd64\.deb/\1/p')
     LS_VERSION=$(basename "$LS_DEB" | sed -n 's/logstash-\(.*\)-amd64\.deb/\1/p')
@@ -61,6 +51,20 @@ else
         exit 1
     fi
 fi
+
+# ✅ Install packages (no service enabling here)
+echo -e "${CYAN}📦 Installing Elasticsearch, Kibana, and Logstash from local .deb packages...${NC}"
+sudo dpkg -i "$PACKAGES_DIR/elasticsearch-${ELASTIC_VERSION}-amd64.deb"
+sudo dpkg -i "$PACKAGES_DIR/kibana-${ELASTIC_VERSION}-amd64.deb"
+sudo dpkg -i "$PACKAGES_DIR/logstash-${ELASTIC_VERSION}-amd64.deb"
+
+# ✅ Validate installation
+for dir in /etc/elasticsearch /etc/kibana /etc/logstash; do
+    if [[ ! -d "$dir" ]]; then
+        echo -e "${RED}❌ Installation failed: Missing directory $dir${NC}"
+        exit 1
+    fi
+done
 
 # Mark as airgap install
 AIRGAP_INSTALL="true"
@@ -79,3 +83,4 @@ add_to_summary_table "Airgap Install" "Yes"
 echo -e "\n${GREEN}Summary of your configuration:${NC}"
 print_summary_table
 
+echo -e "${GREEN}✅ Package installation completed successfully!${NC}"

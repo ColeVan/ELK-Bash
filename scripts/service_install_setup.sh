@@ -11,14 +11,22 @@ source "$ELK_ENV_FILE"
 # Prompt for airgap or no airgap installations
 echo -e "${GREEN}📦 Will you be installing from local Elastic .deb packages (airgapped install)?${NC}"
 while true; do
-    read -rp "$(echo -e "${YELLOW}Enter 'yes' or 'no': ${NC}")" AIRGAP_CHOICE
+    read -rp "$(echo -e "${YELLOW}Enter ${GREEN}'yes'${YELLOW} or ${RED}'no'${YELLOW}: ${NC}")" AIRGAP_CHOICE
     case "$AIRGAP_CHOICE" in
         [Yy]|[Yy][Ee][Ss])
             export AIRGAP_INSTALL="true"
             echo -e "${BLUE}🔧 Preparing airgapped installation...${NC}"
             chmod +x "$SCRIPT_DIR/airgap_setup.sh"
-            "$SCRIPT_DIR/airgap_setup.sh"
+
+            # ✅ Source instead of executing in subshell
+            source "$SCRIPT_DIR/airgap_setup.sh"
             source "$ELK_ENV_FILE"
+
+            # ✅ Verify that installation was successful
+            if [[ ! -d "/etc/elasticsearch" || ! -d "/etc/logstash" || ! -d "/etc/kibana" ]]; then
+                echo -e "${RED}❌ Airgapped installation appears incomplete. Required directories not found.${NC}"
+                exit 1
+            fi
             break
             ;;
         [Nn]|[Nn][Oo])
@@ -206,30 +214,29 @@ echo -e "${GREEN}Checking Elasticsearch status...${NC}"
 check_service elasticsearch
 
 # Create the superuser
-echo -e "${GREEN}Creating a superuser...${NC}"
+echo -e "${CYAN}🔑 Creating Elasticsearch superuser...${NC}"
 if sudo /usr/share/elasticsearch/bin/elasticsearch-users useradd "$USERNAME" -p "$PASSWORD" -r superuser > /dev/null 2>&1; then
-  echo -e "${GREEN}Superuser $USERNAME created successfully.${NC}"
+  echo -e "${BOLD}${GREEN}✅ Superuser '${USERNAME}' created successfully.${NC}"
 else
-  echo -e "${RED}Failed to create superuser $USERNAME. Check logs for details.${NC}"
+  echo -e "${BOLD}${RED}❌ Failed to create superuser '${USERNAME}'.${NC}"
+  echo -e "${YELLOW}⚠️  Check Elasticsearch logs for more details.${NC}"
   exit 1
 fi
 
 # Reset Kibana password and store it in a variable
 echo -e "${GREEN}Resetting Kibana password and saving to variable.${NC}"
-sleep 5 & spinner
 kibana_password=$(sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u kibana -s -b)
+sleep 5 & spinner
 
-echo -e "${GREEN}Kibana password successfully reset in $elapsed_time seconds.${NC}"
-
+# Applying Kibana yaml template
 echo -e "${BLUE}Configuring Kibana...${NC}"
-# Kibana
 apply_template "elk_templates/kibana.yml.tpl" "/etc/kibana/kibana.yml"
 sanitize_line_endings "/etc/kibana/kibana.yml"
 sudo chown -R kibana: /etc/kibana > /dev/null 2>&1
 sleep 2 & spinner
 
-echo -e "${GREEN}Kibana yml file successfully configured.${NC}"
 # Start Kibana service and report status
+echo -e "${GREEN}Kibana yml file successfully configured.${NC}"
 echo -e "${GREEN}Starting Kibana...${NC}"
 sudo systemctl start kibana
 sleep 15 & spinner
@@ -248,9 +255,12 @@ sudo chown -R logstash:logstash /etc/logstash
 sudo mkdir -p /var/lib/logstash/data/dead_letter_queue
 sudo chown -R logstash:logstash /var/lib/logstash/data
 
-# Start the Elastic Stack trial license
-echo -e "${GREEN}Starting the Elastic Stack trial license...${NC}"
-response=$(curl --request POST \
+# ============================================
+# 🚀 Start the Elastic Stack Trial License
+# ============================================
+echo -e "${CYAN}🚀 Initiating Elastic Stack trial license activation...${NC}"
+
+response=$(curl --silent --request POST \
   --url "https://${ELASTIC_HOST}:9200/_license/start_trial?acknowledge=true" \
   --header 'Accept: */*' \
   -u "${USERNAME}:${PASSWORD}" \
@@ -260,18 +270,21 @@ response=$(curl --request POST \
   --header 'kbn-xsrf: xxx' \
   --insecure)
 
-# Display the response
-echo -e "${GREEN}Response from the server:${NC}"
-echo -e "${GREEN}${response}${NC}"
+# Display formatted response
+echo -e "\n${CYAN}📩 Server response:${NC}"
+echo -e "${YELLOW}${response}${NC}\n"
 
-# Check if the trial was successfully started
+# Check if the trial started successfully
 if echo "$response" | grep -q '"trial_was_started":true'; then
-    echo "Trial license has been successfully started."
+    echo -e "${BOLD}${GREEN}✅ Elastic Stack trial license successfully activated!${NC}"
+    echo -e "${YELLOW}ℹ️  This trial license is valid for 30 days.${NC}"
+elif echo "$response" | grep -q '"license_type":"trial"'; then
+    echo -e "${BOLD}${YELLOW}⚠️  Trial license was already activated previously.${NC}"
+    echo -e "${CYAN}ℹ️  Check the current license status with:${NC} curl -u ${USERNAME}:${PASSWORD} -k https://${ELASTIC_HOST}:9200/_license"
 else
-    echo "${RED}Failed to start the trial license.${NC}"
+    echo -e "${BOLD}${RED}❌ Failed to start the trial license.${NC}"
+    echo -e "${YELLOW}⚠️  Please review the server response above for details.${NC}"
 fi
-
-echo -e "${GREEN}Started Elastic Stack trial license.${NC}"
 
 # Obtain the OAuth2 access token
 echo -e "${GREEN}Obtaining OAuth2 access token...${NC}"
@@ -350,6 +363,7 @@ logstash_api_key=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
 	"type": "logstash"
   }
 }' --insecure)
+
 echo $logstash_api_key
 logstash_pipeline_api_key=$(echo "$logstash_api_key" | grep -o '"encoded":"[^"]*"' | sed 's/"encoded":"\([^"]*\)".*/\1/')
 echo $logstash_pipeline_api_key
@@ -358,6 +372,7 @@ echo "$decoded_value"
 
 # Modify or create the Logstash input and output configuration
 echo -e "${BLUE}Writing Logstash Pipeline Config...${NC}"
+
 # Logstash Pipeline
 apply_template "elk_templates/logstash.conf.tpl" "/etc/logstash/conf.d/logstash.conf"
 sanitize_line_endings "/etc/logstash/conf.d/logstash.conf"
