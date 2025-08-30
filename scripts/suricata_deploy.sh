@@ -6,7 +6,7 @@ source "$SCRIPT_DIR/functions.sh"
 PACKAGES_DIR="$SCRIPT_DIR/packages"
 ELK_ENV_FILE="$SCRIPT_DIR/.elk_env"
 
-trap 'echo -e "\n${YELLOW}⚠️  Installation interrupted by user.${NC}"; exit 1' SIGINT
+trap 'echo -e "\n${YELLOW}⚠️  Suricata installation interrupted by user. Returning to menu...${NC}"; return' SIGINT
 
 # Function to print and log summary
 declare -A SUMMARY

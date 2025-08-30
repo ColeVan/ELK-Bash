@@ -2,6 +2,7 @@
 clear
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/functions.sh"
+init_colors
 
 # Trap Ctrl+C and return to menu
 trap 'echo -e "\n${YELLOW}⚠️   Setup interrupted by user. Returning to main menu...${NC}"; pause_and_return_to_menu' SIGINT
@@ -31,27 +32,26 @@ fi
 
 echo -e "${GREEN}✔ Running with sudo as expected.${NC}"
 
-# Prompt user for node type in a loop
+# --- Confirm local ELK (Elasticsearch, Logstash, Kibana) deployment with TLS ---
+printf '%b\n' "${CYAN}This will deploy ${YELLOW}Elasticsearch${NC}, ${YELLOW}Logstash${NC}, and ${YELLOW}Kibana${NC} on this node with ${YELLOW}TLS${NC} configured."
+
+# Loop until the user types a valid "yes" or "no"
 while true; do
-  echo -e "${GREEN}Is this the first node in a cluster, or will this node be joining an existing cluster?${NC}"
-  echo -e "${YELLOW}1) This is a new node.${NC}"
-  echo -e "${YELLOW}2) Joining an existing cluster.${NC}"
-
-  read -p "$(echo -e ${GREEN}'Please enter 1 or 2: '${NC})" NODE_OPTION
-
-  case "$NODE_OPTION" in
-    1)
-      echo -e "${GREEN}✔ Proceeding with setting up a new node...${NC}"
+  read -rp "$(printf '%b' "${GREEN}Proceed with deployment? Type ${YELLOW}yes${GREEN} or ${RED}no${GREEN}: ${NC}")" CONFIRM_DEPLOY
+  case "${CONFIRM_DEPLOY,,}" in
+    y|yes)
+      printf '%b\n' "${GREEN}✔ Proceeding with ELK+TLS deployment on this node...${NC}"
+      DEPLOY_ELK_TLS="yes"
       break
       ;;
-    2)
-      echo -e "${GREEN}➡ This node will join an existing cluster.${NC}"
-      SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-      source "$SCRIPT_DIR/deploy_elasticsearch_node.sh"
-      return 0  # or exit 0 if this is in a standalone script
+    n|no)
+      printf '%b\n' "${YELLOW}ℹ Deployment canceled by user. No changes made.${NC}"
+      DEPLOY_ELK_TLS="no"
+      # If this script is sourced, return; otherwise exit cleanly.
+      return 0 2>/dev/null || exit 0
       ;;
     *)
-      echo -e "${RED}❌ Invalid selection. Please enter 1 or 2 only.${NC}"
+      printf '%b\n' "${RED}❌ Invalid input. Please type exactly 'yes' or 'no'.${NC}"
       ;;
   esac
 done
@@ -128,28 +128,28 @@ perform_elk_cleanup() {
 		# --- Docker Cleanup for Elastic Package Registry ---
 	echo -e "${CYAN}Cleaning up Elastic Package Registry Docker resources...${NC}"
 
-	# Find all containers using EPR images (regardless of version)
-	EPR_CONTAINERS=$(docker ps -a --format "{{.ID}} {{.Image}}" \
-	  | grep "docker.elastic.co/package-registry/distribution:" \
-	  | awk '{print $1}')
+	# Containers derived from EPR image (any tag)
+	mapfile -t EPR_CONTAINERS < <(docker ps -aq --filter "ancestor=docker.elastic.co/package-registry/distribution" || true)
 
-	if [[ -n "$EPR_CONTAINERS" ]]; then
-	  echo -e "${YELLOW}Stopping and removing container(s):${NC}\n$EPR_CONTAINERS"
-	  docker stop $EPR_CONTAINERS >/dev/null 2>&1
-	  docker rm $EPR_CONTAINERS >/dev/null 2>&1
+	if ((${#EPR_CONTAINERS[@]})); then
+	  echo -e "${YELLOW}Stopping and removing container(s):${NC}\n${EPR_CONTAINERS[*]}"
+	  docker stop "${EPR_CONTAINERS[@]}" >/dev/null 2>&1 || true
+	  docker rm   "${EPR_CONTAINERS[@]}" >/dev/null 2>&1 || true
 	  echo -e "${GREEN}✔ Containers stopped and removed.${NC}"
 	else
-	  echo -e "${GREEN}No running EPR containers found.${NC}"
+	  echo -e "${GREEN}No EPR containers found.${NC}"
 	fi
 
-	# Find and remove matching EPR image IDs
-	EPR_IMAGE_IDS=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" \
-	  | grep "^docker.elastic.co/package-registry/distribution:" \
-	  | awk '{print $2}' | sort -u)
+	# Image IDs for EPR
+	mapfile -t EPR_IMAGE_IDS < <(
+	  docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" 2>/dev/null \
+	  | awk '$1 ~ /^docker\.elastic\.co\/package-registry\/distribution:/ {print $2}' \
+	  | sort -u
+	) || true
 
-	if [[ -n "$EPR_IMAGE_IDS" ]]; then
-	  echo -e "${YELLOW}Removing image(s):${NC}\n$EPR_IMAGE_IDS"
-	  docker rmi -f $EPR_IMAGE_IDS >/dev/null 2>&1 \
+	if ((${#EPR_IMAGE_IDS[@]})); then
+	  echo -e "${YELLOW}Removing image(s):${NC}\n${EPR_IMAGE_IDS[*]}"
+	  docker rmi -f "${EPR_IMAGE_IDS[@]}" >/dev/null 2>&1 \
 		&& echo -e "${GREEN}✔ Image(s) removed.${NC}" \
 		|| echo -e "${RED}⚠ Failed to remove some images.${NC}"
 	else
@@ -292,7 +292,6 @@ while true; do
             ;;
     esac
 done
-
 
 # === Common IP Prompt and Assignment ===
 echo -e "\n${GREEN}Elasticsearch, Logstash, and Kibana will be hosted using the IP you enter below.${NC}"

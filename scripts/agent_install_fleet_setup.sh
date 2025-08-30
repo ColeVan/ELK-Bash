@@ -76,44 +76,57 @@ echo -e "${YELLOW}Fleet Server Host Response:${NC} $fleet_server_host"
 sleep 10 & spinner
 
 # --- 4. Install Elastic Agent ---
-# Use the extracted directory from PACKAGES_DIR
-AGENT_EXTRACTED_DIR="$PACKAGES_DIR/elastic-agent-${AGENT_VERSION}-linux-x86_64"
+AGENT_EXTRACTED_DIR="${PACKAGES_DIR}/elastic-agent-${AGENT_VERSION}-linux-x86_64"
 
-if [[ -d "$AGENT_EXTRACTED_DIR" ]]; then
-    cd "$AGENT_EXTRACTED_DIR" || {
-        echo -e "${RED}❌ Could not enter directory: $AGENT_EXTRACTED_DIR${NC}"
-        exit 1
-    }
-    echo -e "${GREEN}✔ Using extracted Elastic Agent directory: $AGENT_EXTRACTED_DIR${NC}"
-else
-    echo -e "${RED}❌ Extracted Elastic Agent directory not found. Exiting.${NC}"
-    exit 1
+if [[ ! -d "$AGENT_EXTRACTED_DIR" ]]; then
+  echo -e "${RED}❌ Extracted Elastic Agent directory not found: ${AGENT_EXTRACTED_DIR}${NC}"
+  return 1 2>/dev/null || exit 1
 fi
 
-# Install agent with Fleet server options
-echo -e "${GREEN}🔑 Using Service Token:${NC} $SERVICE_NAME_TOKEN"
-sudo yes | sudo ./elastic-agent install \
-  --url=https://${ELASTIC_HOST}:8220 \
-  --fleet-server-es=https://${ELASTIC_HOST}:9200 \
-  --fleet-server-service-token="$SERVICE_NAME_TOKEN" \
-  --fleet-server-policy="fleet-server-policy" \
-  --fleet-server-es-ca=/usr/share/elasticsearch/ssl/ca/ca.crt \
-  --certificate-authorities=/usr/share/elasticsearch/ssl/ca/ca.crt \
-  --fleet-server-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt \
-  --fleet-server-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key \
-  --fleet-server-port=8220 \
-  --elastic-agent-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt \
-  --elastic-agent-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key \
-  --fleet-server-es-cert=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt \
-  --fleet-server-es-cert-key=/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key \
-  --fleet-server-es-insecure
+# Enter the agent dir safely; leave when done
+pushd "$AGENT_EXTRACTED_DIR" >/dev/null || { 
+  echo -e "${RED}❌ Could not enter directory: ${AGENT_EXTRACTED_DIR}${NC}"
+  return 1 2>/dev/null || exit 1
+}
+
+if [[ ! -x ./elastic-agent ]]; then
+  echo -e "${RED}❌ elastic-agent binary not found in ${AGENT_EXTRACTED_DIR}${NC}"
+  popd >/dev/null || true
+  return 1 2>/dev/null || exit 1
+fi
+
+# (Optional) mask the token in logs
+masked_token="${SERVICE_NAME_TOKEN:0:6}…${SERVICE_NAME_TOKEN: -4}"
+echo -e "${GREEN}🔑 Using Fleet service token:${NC} ${masked_token}"
+
+# --- Install Elastic Agent non-interactively (NO 'yes |')
+set +e
+sudo ./elastic-agent install \
+  --url "https://${ELASTIC_HOST}:8220" \
+  --fleet-server-es "https://${ELASTIC_HOST}:9200" \
+  --fleet-server-service-token "$SERVICE_NAME_TOKEN" \
+  --fleet-server-policy "fleet-server-policy" \
+  --fleet-server-es-ca "/usr/share/elasticsearch/ssl/ca/ca.crt" \
+  --certificate-authorities "/usr/share/elasticsearch/ssl/ca/ca.crt" \
+  --fleet-server-cert "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt" \
+  --fleet-server-cert-key "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key" \
+  --fleet-server-port 8220 \
+  --elastic-agent-cert "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt" \
+  --elastic-agent-cert-key "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key" \
+  --fleet-server-es-cert "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.crt" \
+  --fleet-server-es-cert-key "/usr/share/elasticsearch/ssl/elasticsearch/elasticsearch.key" \
+  --fleet-server-es-insecure \
+  --non-interactive
+install_rc=$?
+set -e
+popd >/dev/null || true
 
 # --- 5. Confirm Installation ---
-if [[ $? -eq 0 ]]; then
-    echo -e "${GREEN}✔ Elastic Agent installed successfully.${NC}"
+if (( install_rc == 0 )); then
+  echo -e "${GREEN}✔ Elastic Agent installed successfully.${NC}"
 else
-    echo -e "${RED}❌ Elastic Agent installation failed.${NC}"
-    exit 1
+  echo -e "${RED}❌ Elastic Agent installation failed (rc=${install_rc}).${NC}"
+  return 1 2>/dev/null || exit 1
 fi
 
 # Wait for 10 seconds while creating windows policy

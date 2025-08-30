@@ -1,12 +1,8 @@
 #!/bin/bash
 
-# Define colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/functions.sh"
+init_colors
 
 echo -e "${GREEN}"
 cat << 'EOF'
@@ -20,145 +16,135 @@ cat << 'EOF'
 EOF
 echo -e "${NC}"
 
-# Inform user that this portion of the script is for Elasticsearch node install only
 echo -e "${GREEN}This portion of the script is intended to deploy an Elasticsearch node which will be joined to your cluster.${NC}"
-read -p "$(echo -e ${GREEN}'Do you want to continue? (y/n): '${NC})" CONFIRM
+read -r -p "$(echo -e "${GREEN}Do you want to continue? (yes/no): ${NC}")" CONFIRM
 
-if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-    echo -e "${GREEN}Exiting script. No changes made.${NC}"
-    exit 0
+# Exit unless the user explicitly answers y/yes (case-insensitive)
+if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
+  echo -e "${GREEN}Exiting script. No changes made.${NC}"
+  exit 0
 fi
 
-# --- Prompt for ELK install history ---
-echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
-# Prompt the user
-prompt_input "Type \"${YELLOW}yes${GREEN}\" if there is a previous installation on this machine, or \"${YELLOW}no${GREEN}\" to continue with a fresh install: " INSTALL_RESPONSE
+# --- Prompt for ELK install history (SAFE) ---
+printf '\n%b\n' "${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
+while true; do
+  read -rp "$(printf 'Type "%byes%b" if there is a previous installation on this machine, or "%bno%b" to continue with a fresh install: ' "$YELLOW" "$NC" "$YELLOW" "$NC")" INSTALL_RESPONSE
+  case "${INSTALL_RESPONSE,,}" in
+    y|yes) INSTALL_RESPONSE="yes"; PREVIOUS_INSTALL=true; FRESH_INSTALL=false; break;;
+    n|no)  INSTALL_RESPONSE="no";  PREVIOUS_INSTALL=false; FRESH_INSTALL=true;  break;;
+    *)     printf '%b\n' "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}";;
+  esac
+done
 
-if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-    PREVIOUS_INSTALL=true
-    FRESH_INSTALL=false
-    echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
+if [[ "$INSTALL_RESPONSE" == "yes" ]]; then
+  echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
 
-    # Stop and disable services, then forcefully kill remaining processes if needed
-    for svc in elasticsearch logstash kibana; do
-        if systemctl list-units --type=service | grep -q "$svc"; then
-            echo -e "${CYAN}Stopping and disabling $svc...${NC}"
-            sudo systemctl stop "$svc" 2>/dev/null || echo -e "${YELLOW}Could not stop $svc or it was not running.${NC}"
-            sudo systemctl disable "$svc" 2>/dev/null || echo -e "${YELLOW}Could not disable $svc or it was not enabled.${NC}"
-        else
-            echo -e "${YELLOW}$svc service not found. Skipping systemd stop...${NC}"
-        fi
+  # Helpers: unit existence + safe kill within service cgroup
+  unit_loaded() { [[ "$(systemctl show -p LoadState --value "${1}.service" 2>/dev/null)" == "loaded" ]]; }
+  kill_unit_procs() {
+    local svc="$1"
+    sudo systemctl kill -s TERM "$svc" 2>/dev/null || true
+    sleep 1
+    sudo systemctl kill -s KILL "$svc" 2>/dev/null || true
+  }
 
-        # Force kill any lingering processes
-        echo -e "${CYAN}Killing any remaining $svc processes...${NC}"
-        sudo pkill -f "$svc" 2>/dev/null || echo -e "${YELLOW}No lingering $svc processes found.${NC}"
-    done
+  # Stop/disable and ensure no lingering procs (NO pkill -f)
+  for svc in elasticsearch logstash kibana; do
+    if unit_loaded "$svc"; then
+      echo -e "${CYAN}Stopping and disabling $svc...${NC}"
+      sudo systemctl stop "$svc" 2>/dev/null || true
+      sudo systemctl disable "$svc" 2>/dev/null || true
+      echo -e "${CYAN}Ensuring no lingering $svc processes...${NC}"
+      kill_unit_procs "$svc"
+    else
+      echo -e "${YELLOW}$svc service not found. Skipping systemd stop...${NC}"
+    fi
+  done
 
-		# --- Clean up Elastic Agent ---
-	echo -e "${CYAN}Checking for Elastic Agent cleanup...${NC}"
+  # --- Elastic Agent cleanup (service-aware; no broad pkill) ---
+  if unit_loaded "elastic-agent"; then
+    echo -e "${CYAN}Stopping and disabling elastic-agent...${NC}"
+    sudo systemctl stop elastic-agent 2>/dev/null || true
+    sudo systemctl disable elastic-agent 2>/dev/null || true
+    kill_unit_procs "elastic-agent"
+  else
+    # Fallback: kill exact process name if present
+    if pgrep -x elastic-agent >/dev/null 2>&1; then
+      echo -e "${YELLOW}Elastic Agent process detected. Terminating...${NC}"
+      pkill -x elastic-agent 2>/dev/null || true
+      echo -e "${GREEN}✔ Elastic Agent process terminated.${NC}"
+    else
+      echo -e "${GREEN}No running Elastic Agent process found.${NC}"
+    fi
+  fi
 
-	# Kill any running elastic-agent processes
-	if pgrep -f elastic-agent > /dev/null; then
-		echo -e "${YELLOW}Elastic Agent process detected. Terminating...${NC}"
-		sudo pkill -f elastic-agent
-		echo -e "${GREEN}✔ Elastic Agent process terminated.${NC}"
-	else
-		echo -e "${GREEN}No running Elastic Agent process found.${NC}"
-	fi
+  # Remove Elastic Agent install dir
+  if [[ -d "/opt/Elastic" ]]; then
+    echo -e "${YELLOW}Removing existing Elastic Agent installation at /opt/Elastic...${NC}"
+    sudo rm -rf /opt/Elastic
+    echo -e "${GREEN}✔ Elastic Agent directory removed successfully.${NC}"
+  else
+    echo -e "${GREEN}No Elastic Agent directory found at /opt/Elastic. Skipping...${NC}"
+  fi
 
-	# Remove Elastic Agent install directory
-	if [ -d "/opt/Elastic" ]; then
-		echo -e "${YELLOW}Removing existing Elastic Agent installation at /opt/Elastic...${NC}"
-		sudo rm -rf /opt/Elastic
-		echo -e "${GREEN}✔ Elastic Agent directory removed successfully.${NC}"
-	else
-		echo -e "${GREEN}No Elastic Agent directory found at /opt/Elastic. Skipping...${NC}"
-	fi
+  # Remove lingering systemd unit (agent)
+  if [[ -f "/etc/systemd/system/elastic-agent.service" ]]; then
+    echo -e "${YELLOW}Found systemd unit file for Elastic Agent. Cleaning up...${NC}"
+    sudo systemctl disable elastic-agent 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/elastic-agent.service
+    sudo systemctl daemon-reexec || true
+    sudo systemctl daemon-reload || true
+    echo -e "${GREEN}✔ Removed stale elastic-agent systemd service.${NC}"
+  else
+    echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
+  fi
 
-	# Remove lingering systemd service unit
-	if [ -f "/etc/systemd/system/elastic-agent.service" ]; then
-		echo -e "${YELLOW}Found systemd unit file for Elastic Agent. Cleaning up...${NC}"
-		sudo systemctl disable elastic-agent 2>/dev/null || true
-		sudo rm -f /etc/systemd/system/elastic-agent.service
-		sudo systemctl daemon-reexec
-		sudo systemctl daemon-reload
-		echo -e "${GREEN}✔ Removed stale elastic-agent systemd service.${NC}"
-	else
-		echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
-	fi
-	
-	# Cleanup: Remove lingering Elastic Agent files from user's home directory
-	echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
+  # Cleanup: stale agent artifacts in $HOME
+  echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
+  shopt -s nullglob
+  AGENT_TARS=( "$HOME"/elastic-agent-*-linux-x86_64.tar.gz )
+  AGENT_DIRS=( "$HOME"/elastic-agent-*-linux-x86_64 )
+  for file in "${AGENT_TARS[@]}"; do
+    echo -e "${YELLOW}Removing Elastic Agent archive: $(basename "$file")${NC}"
+    rm -f -- "$file"
+  done
+  for dir in "${AGENT_DIRS[@]}"; do
+    if [[ -d "$dir" ]]; then
+      echo -e "${YELLOW}Removing Elastic Agent directory: $(basename "$dir")${NC}"
+      rm -rf -- "$dir"
+    fi
+  done
+  shopt -u nullglob
+  echo -e "${GREEN}✔ Finished cleaning up Elastic Agent artifacts in home directory.${NC}"
 
-	# Define patterns
-	AGENT_TAR_PATTERN="$HOME/elastic-agent-*-linux-x86_64.tar.gz"
-	AGENT_DIR_PATTERN="$HOME/elastic-agent-*-linux-x86_64"
+  # Uninstall packages (don’t let set -e nuke the script)
+  echo -e "${CYAN}Attempting to uninstall Elasticsearch, Logstash, and Kibana...${NC}"
+  set +e
+  sudo apt-get purge -y elasticsearch logstash kibana >/dev/null 2>&1
+  sudo apt-get autoremove -y >/dev/null 2>&1
+  set -e
 
-	shopt -s nullglob
+  # Remove directories and files (only if they exist)
+  paths_to_clean=(
+    /etc/elasticsearch /etc/logstash /etc/kibana
+    /var/lib/elasticsearch /var/lib/logstash
+    /var/log/elasticsearch /var/log/logstash /var/log/kibana
+    /usr/share/elasticsearch /usr/share/logstash /usr/share/kibana
+    /etc/apt/sources.list.d/elastic-8.x.list
+    /etc/apt/sources.list.d/elastic-9.x.list
+  )
+  for path in "${paths_to_clean[@]}"; do
+    if [[ -e "$path" ]]; then
+      echo -e "${CYAN}Removing $path...${NC}"
+      sudo rm -rf -- "$path"
+    else
+      echo -e "${YELLOW}Path not found: $path — skipping.${NC}"
+    fi
+  done
 
-	# Find tarballs
-	AGENT_TARS=($AGENT_TAR_PATTERN)
-	if [ ${#AGENT_TARS[@]} -gt 0 ]; then
-		for file in "${AGENT_TARS[@]}"; do
-			echo -e "${YELLOW}Removing Elastic Agent archive: $(basename "$file")${NC}"
-			rm -f "$file"
-		done
-	else
-		echo -e "${GREEN}No Elastic Agent tar.gz files found. Skipping archive cleanup...${NC}"
-	fi
-
-	# Find directories
-	AGENT_DIRS=($AGENT_DIR_PATTERN)
-	if [ ${#AGENT_DIRS[@]} -gt 0 ]; then
-		for dir in "${AGENT_DIRS[@]}"; do
-			if [ -d "$dir" ]; then
-				echo -e "${YELLOW}Removing Elastic Agent directory: $(basename "$dir")${NC}"
-				rm -rf "$dir"
-			fi
-		done
-	else
-		echo -e "${GREEN}No Elastic Agent directories found. Skipping directory cleanup...${NC}"
-	fi
-
-	shopt -u nullglob
-
-	echo -e "${GREEN}✔ Finished cleaning up Elastic Agent artifacts in home directory.${NC}"
-
-
-    # Uninstall packages
-    echo -e "${CYAN}Attempting to uninstall Elasticsearch, Logstash, and Kibana...${NC}"
-    sudo apt-get purge -y elasticsearch logstash kibana > /dev/null 2>&1 || true
-    sudo apt-get autoremove -y > /dev/null 2>&1 || true
-
-    # Remove directories and files (only if they exist)
-    paths_to_clean=(
-        /etc/elasticsearch /etc/logstash /etc/kibana
-        /var/lib/elasticsearch /var/lib/logstash
-        /var/log/elasticsearch /var/log/logstash /var/log/kibana
-        /usr/share/elasticsearch /usr/share/logstash /usr/share/kibana
-        /etc/apt/sources.list.d/elastic-8.x.list
-		/etc/apt/sources.list.d/elastic-9.x.list
-    )
-
-    for path in "${paths_to_clean[@]}"; do
-        if [ -e "$path" ]; then
-            echo -e "${CYAN}Removing $path...${NC}"
-            sudo rm -rf "$path"
-            
-        else
-            echo -e "${YELLOW}Path not found: $path — skipping.${NC}"
-        fi
-    done
-
-    echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
-
-elif [[ "$INSTALL_RESPONSE" =~ ^[Nn][Oo]$ ]]; then
-    PREVIOUS_INSTALL=false
-    FRESH_INSTALL=true
-    echo -e "${GREEN}Confirmed: Fresh install. Continuing setup...${NC}"
+  echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
 else
-    echo -e "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}"
-    exit 1
+  echo -e "${GREEN}Confirmed: Fresh install. Continuing setup...${NC}"
 fi
 
 # Lowercase & trim just in case
@@ -358,89 +344,114 @@ echo -e "${GREEN}✔ Elasticsearch installation completed successfully.${NC}"
 sleep 5 & spinner "Configuring Elasticsearch..."
 echo -e "${GREEN}✔ Time to join nodes together and create a cluster.${NC}"
 
-# Prompt for the first Node IP with validation
+# --- SAFE PROMPTS (replace your read -p "$(echo -e ...") with these) ---
+
+# Node IP
 while true; do
-    read -p "$(echo -e ${GREEN}Enter the first node IP: ${NC})" NODE_IP
-    if validate_ip "$NODE_IP"; then
-        echo -e "${GREEN}✔ Node IP accepted: ${YELLOW}$NODE_IP${NC}"
-        break
-    else
-        echo -e "${RED}❌ Invalid IP address. Please try again.${NC}"
-    fi
+  read -rp "$(printf '%b' "${GREEN}Enter the first node IP: ${NC}") " NODE_IP
+  if validate_ip "$NODE_IP"; then
+    printf '%b\n' "${GREEN}✔ Node IP accepted: ${YELLOW}${NODE_IP}${NC}"
+    break
+  else
+    printf '%b\n' "${RED}❌ Invalid IP address. Please try again.${NC}"
+  fi
 done
 
-# Prompt for superuser username used to stand up the first elasticsearch service with validation
+# Superuser username
 while true; do
-    read -p "$(echo -e ${GREEN}Enter your superuser username: ${NC})" USERNAME
-    if validate_username "$USERNAME"; then
-        echo -e "${GREEN}✔ Username accepted: ${YELLOW}$USERNAME${NC}"
-        break
-    else
-        echo -e "${RED}❌ Invalid username. Please try again.${NC}"
-    fi
+  read -rp "$(printf '%b' "${GREEN}Enter your superuser username: ${NC}") " USERNAME
+  if validate_username "$USERNAME"; then
+    printf '%b\n' "${GREEN}✔ Username accepted: ${YELLOW}${USERNAME}${NC}"
+    break
+  else
+    printf '%b\n' "${RED}❌ Invalid username. Please try again.${NC}"
+  fi
 done
 
-# Prompt for superuser password (silent) with basic non-empty check
+# Superuser password (silent)
 while true; do
-    read -s -p "$(echo -e ${GREEN}Enter your superuser password: ${NC})" PASSWORD
-    echo ""
-    if validate_password "$PASSWORD"; then
-        echo -e "${GREEN}✔ Password accepted.${NC}"
-        break
-    else
-        echo -e "${RED}❌ Invalid password. Please try again.${NC}"
-    fi
+  read -rsp "$(printf '%b' "${GREEN}Enter your superuser password: ${NC}") " PASSWORD; echo
+  if validate_password "$PASSWORD"; then
+    printf '%b\n' "${GREEN}✔ Password accepted.${NC}"
+    break
+  else
+    printf '%b\n' "${RED}❌ Invalid password. Please try again.${NC}"
+  fi
 done
 
-# Extract cluster health status using validated inputs
-CLUSTER_RESPONSE=$(curl -s -k -u "$USERNAME:$PASSWORD" https://$NODE_IP:9200/_cluster/health)
-CLUSTER_STATUS=$(echo "$CLUSTER_RESPONSE" | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+# --- CLUSTER HEALTH + CLUSTER NAME (fixes $RESPONSE bug) ---
+CLUSTER_RESPONSE="$(curl -s -k -u "$USERNAME:$PASSWORD" "https://${NODE_IP}:9200/_cluster/health")"
+CLUSTER_STATUS="$(echo "$CLUSTER_RESPONSE" | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')"
+CLUSTER_NAME="$(echo "$CLUSTER_RESPONSE" | grep -o '"cluster_name":"[^"]*"' | awk -F'"' '{print $4}')"
+printf '%b\n' "${GREEN}Detected Elasticsearch cluster name: ${YELLOW}${CLUSTER_NAME:-<unknown>}${NC}"
 
-# Extract cluster_name from the response
-CLUSTER_NAME=$(echo "$RESPONSE" | grep '"cluster_name"' | awk -F'"' '{print $4}')
+# --- ENROLLMENT TOKEN (env/arg aware; safe prompt fallback) ---
+: "${GREEN:=$'\e[32m'}"; : "${YELLOW:=$'\e[33m'}"; : "${RED:=$'\e[31m'}"; : "${NC:=$'\e[0m'}"
+is_valid_enrollment_token() { [[ "${1:-}" =~ ^[A-Za-z0-9+/=._-]{20,}$ ]]; }
 
-# Output the extracted cluster name
-echo -e "${GREEN}Detected Elasticsearch cluster name: ${YELLOW}${CLUSTER_NAME}${NC}"
+CANDIDATE_TOKEN="${1:-${CLUSTER_TOKEN:-${ENROLLMENT_TOKEN:-}}}"
+CANDIDATE_TOKEN="$(printf '%s' "$CANDIDATE_TOKEN" | tr -d '\r' | xargs)"
 
-# Prompt for the cluster API token for joining cluster
-while true; do
-    read -p "$(echo -e ${GREEN}Enter the API key generated from your first node using the following cmd /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node:${NC} ) " CLUSTER_TOKEN
-
-    CLUSTER_TOKEN="$(echo "$CLUSTER_TOKEN" | xargs)"
-
+if [[ -n "$CANDIDATE_TOKEN" ]] && is_valid_enrollment_token "$CANDIDATE_TOKEN"; then
+  CLUSTER_TOKEN="$CANDIDATE_TOKEN"
+  printf '%b\n' "${GREEN}✔ Enrollment token received from environment/arguments.${NC}"
+else
+  printf -v _prompt '%b' \
+    "${GREEN}Enter the enrollment token from your first node (${YELLOW}/usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node${GREEN}): ${NC}"
+  while true; do
+    read -rsp "$_prompt " CLUSTER_TOKEN; echo
+    CLUSTER_TOKEN="$(printf '%s' "$CLUSTER_TOKEN" | tr -d '\r' | xargs)"
     if [[ -z "$CLUSTER_TOKEN" ]]; then
-        echo -e "${RED}❌ API key cannot be empty. Please enter a valid key.${NC}"
-    elif [[ ! "$CLUSTER_TOKEN" =~ ^[a-zA-Z0-9+/=]+$ ]]; then
-        echo -e "${RED}❌ API key appears invalid. Check for typos and try again.${NC}"
-    else
-        echo -e "${GREEN}✔ API key accepted.${NC}"
-        break
+      printf '%b\n' "${RED}❌ Token cannot be empty.${NC}"; continue
     fi
-done
+    if is_valid_enrollment_token "$CLUSTER_TOKEN"; then
+      printf '%b\n' "${GREEN}✔ Token accepted.${NC}"; break
+    else
+      printf '%b\n' "${RED}❌ Token appears invalid. Check for copy/paste issues and try again.${NC}"
+    fi
+  done
+fi
+export CLUSTER_TOKEN
 
-sudo /usr/share/elasticsearch/bin/elasticsearch-reconfigure-node --enrollment-token $CLUSTER_TOKEN
+# --- ENROLL THIS NODE *BEFORE* STARTING ES; QUOTE THE TOKEN ---
+printf '%b\n' "${GREEN}🔐 Enrolling node with cluster using provided token...${NC}"
+set +e
+sudo /usr/share/elasticsearch/bin/elasticsearch-reconfigure-node --enrollment-token "$CLUSTER_TOKEN"
+enroll_rc=$?
+set -e
+if (( enroll_rc != 0 )); then
+  printf '%b\n' "${RED}❌ Node enrollment failed (rc=${enroll_rc}).${NC}"
+  printf '%b\n' "${YELLOW}Tip:${NC} Ensure the first node is running and reachable on 9200, and the token hasn’t expired."
+  return 1 2>/dev/null || exit 1
+fi
+printf '%b\n' "${GREEN}✔ Node enrollment completed.${NC}"
 
-# Configure Elasticsearch - only update cluster.name and node.name
-echo -e "${GREEN}Updating node.name and cluster.name...${NC}"
+# --- DO NOT OVERRIDE TRANSPORT-TLS; SCRUB ANY MANUAL SETTINGS ---
+ES_YML="/etc/elasticsearch/elasticsearch.yml"
+if grep -qE '^\s*xpack\.security\.transport\.ssl\.' "$ES_YML"; then
+  printf '%b\n' "${YELLOW}⚠ Found transport SSL overrides in ${ES_YML}. Commenting them out to use enrolled settings...${NC}"
+  sudo sed -Ei 's/^(\s*xpack\.security\.transport\.ssl\..*)/# \1/' "$ES_YML"
+fi
 
-# Update node.name
-sudo sed -i "s/^node\.name:.*/node.name: \"${NODE_NAME}\"/" /etc/elasticsearch/elasticsearch.yml
+# --- UPDATE ONLY node.name / cluster.name ---
+printf '%b\n' "${GREEN}Updating node.name and cluster.name...${NC}"
+sudo sed -i "s/^node\.name:.*/node.name: \"${NODE_NAME}\"/" "$ES_YML" || echo "node.name: \"${NODE_NAME}\"" | sudo tee -a "$ES_YML" >/dev/null
+sudo sed -i "s/^cluster\.name:.*/cluster.name: \"${CLUSTER_NAME}\"/" "$ES_YML" || echo "cluster.name: \"${CLUSTER_NAME}\"" | sudo tee -a "$ES_YML" >/dev/null
 
-# Update cluster.name
-sudo sed -i "s/^cluster\.name:.*/cluster.name: \"${CLUSTER_NAME}\"/" /etc/elasticsearch/elasticsearch.yml
-
-echo -e "${GREEN}Reloading Daemon.${NC}"
+# --- START ES ---
+printf '%b\n' "${GREEN}Reloading Daemon.${NC}"
 sudo systemctl daemon-reload
-
-echo -e "${GREEN}Enabling Elasticsearch for persistent start upon reboot.${NC}"
+printf '%b\n' "${GREEN}Enabling Elasticsearch for persistent start upon reboot.${NC}"
 sudo systemctl enable elasticsearch
-
-# Start Elasticsearch service and report status
-echo -e "${GREEN}Starting Elasticsearch...${NC}"
+printf '%b\n' "${GREEN}Starting Elasticsearch...${NC}"
 sudo systemctl start elasticsearch
-sleep 5 & spinner
-echo -e "${GREEN}Checking Elasticsearch status...${NC}"
+sleep 5 & spinner "Waiting for Elasticsearch to start"
+printf '%b\n' "${GREEN}Checking Elasticsearch status...${NC}"
 check_service elasticsearch
+
+# --- FIXED MESSAGE (COMMON_IP vs ELASTIC_HOST) ---
+printf '%b\n' "${GREEN}✔ This Elasticsearch node will be set up at IP: ${YELLOW}${COMMON_IP}${NC}"
+
 
 echo -e "${GREEN}This node has been successfully added to the Elasticsearch cluster.${NC}"
 echo -e "${GREEN}You can now repeat the process on the next node using the corresponding token generated from the initial node.${NC}"

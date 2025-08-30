@@ -2,6 +2,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/functions.sh"
+init_colors
 
 # Load environment config (set earlier)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

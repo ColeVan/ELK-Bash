@@ -6,8 +6,7 @@ source "$SCRIPT_DIR/functions.sh"
 PACKAGES_DIR="$SCRIPT_DIR/packages"
 ELK_ENV_FILE="$SCRIPT_DIR/.elk_env"
 
-trap 'echo -e "\n${YELLOW}⚠️   Zeek installation interrupted by user. Returning to main menu...${NC}"; pause_and_return_to_menu' SIGINT
-trap - SIGINT
+trap 'echo -e "\n${YELLOW}⚠️  Zeek installation interrupted by user. Returning to menu...${NC}"; return' SIGINT
 
 echo -e "${GREEN}📡 Starting Zeek installation process...${NC}"
 

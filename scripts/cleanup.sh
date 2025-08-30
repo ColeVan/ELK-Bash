@@ -1,9 +1,12 @@
 #!/bin/bash
 
-# --- Path to extracted agent directory ---
-AGENT_DIR="$HOME/elastic-agent-9.0.2-linux-x86_64"
+SEARCH_DIRS=("$HOME" "$PWD" "$PWD/packages")
 
-# --- Header ---
+# What directory names to match (covers version + arch variants)
+# Examples matched: elastic-agent-9.0.2-linux-x86_64, elastic-agent-8.17.3-linux-arm64, etc.
+PATTERNS=( "elastic-agent-*-linux-x86_64" "elastic-agent-*-linux-amd64"
+           "elastic-agent-*-linux-arm64"  "elastic-agent-*-linux-aarch64" )
+
 echo -e "${CYAN}"
 echo "========================================="
 echo "   🧹 Cleaning up Extracted Agent Folder"
@@ -12,14 +15,31 @@ echo "       Elasticsearch, Logstash, Kibana"
 echo "========================================="
 echo -e "${NC}"
 
-# --- Remove extracted directory ---
-if [[ -d "$AGENT_DIR" ]]; then
-    echo -e "${YELLOW}Removing directory: ${CYAN}$AGENT_DIR${NC}"
-    rm -rf "$AGENT_DIR"
-    echo -e "${GREEN}✔ Removed extracted agent directory.${NC}"
-else
-    echo -e "${YELLOW}Directory not found: $AGENT_DIR — skipping.${NC}"
+shopt -s nullglob
+
+FOUND_ANY=0
+for base in "${SEARCH_DIRS[@]}"; do
+  [[ -d "$base" ]] || continue
+  for pat in "${PATTERNS[@]}"; do
+    for dir in "$base"/$pat; do
+      # Extra safety: ensure the name contains 'elastic-agent-' prefix
+      if [[ -d "$dir" && "$(basename "$dir")" == elastic-agent-* ]]; then
+        FOUND_ANY=1
+        echo -e "${YELLOW}Removing directory: ${CYAN}$dir${NC}"
+        rm -rf -- "$dir"
+        echo -e "${GREEN}✔ Removed extracted agent directory.${NC}"
+      fi
+    done
+  done
+done
+
+shopt -u nullglob
+
+if [[ $FOUND_ANY -eq 0 ]]; then
+  echo -e "${YELLOW}No extracted Elastic Agent directories found in:${NC}"
+  printf '  - %s\n' "${SEARCH_DIRS[@]}"
 fi
+
 
 # --- Prompt for ELK install history ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
@@ -154,6 +174,16 @@ perform_elk_cleanup() {
         fi
     done
 
+    # --- Remove .elk_env in current working directory ---
+    ELK_ENV_FILE="$PWD/.elk_env"
+    if [ -f "$ELK_ENV_FILE" ]; then
+        echo -e "${YELLOW}Removing deployment state file: ${CYAN}$ELK_ENV_FILE${NC}"
+        rm -f "$ELK_ENV_FILE"
+        echo -e "${GREEN}✔ Removed .elk_env state file.${NC}"
+    else
+        echo -e "${GREEN}No .elk_env state file found. Skipping...${NC}"
+    fi
+
     echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
 }
 
@@ -184,3 +214,7 @@ else
     echo -e "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}"
     exit 1
 fi
+
+uninstall_and_cleanup_zeek
+
+uninstall_and_cleanup_suricata

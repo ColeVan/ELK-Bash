@@ -1,13 +1,46 @@
 #!/bin/bash
 # Common utility functions for deployment scripts
 
-# Color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[1;34m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Initialize color/style variables safely.
+# Usage: init_colors            # normal (no override if already inited)
+#        init_colors force      # re-evaluate (e.g., after changing NO_COLOR/FORCE_COLOR)
+init_colors() {
+  local force="${1:-}"
+  if [[ -n "${COLORS_INITIALIZED:-}" && -z "$force" ]]; then
+    return 0
+  fi
+
+  # If NO_COLOR is set (to anything), disable colors unconditionally.
+  if [[ -n "${NO_COLOR-}" ]]; then
+    BOLD=""; UNDERLINE=""; NC=""
+    RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""
+  elif [[ -t 1 || -n "${FORCE_COLOR-}" ]]; then
+    # Color output enabled: TTY or FORCE_COLOR present
+    if command -v tput >/dev/null 2>&1; then
+      BOLD="${BOLD:-$(tput bold 2>/dev/null || echo $'\e[1m')}"
+      UNDERLINE="${UNDERLINE:-$(tput smul 2>/dev/null || echo $'\e[4m')}"
+      NC="${NC:-$(tput sgr0 2>/dev/null || echo $'\e[0m')}"
+    else
+      BOLD="${BOLD:-$'\e[1m'}"
+      UNDERLINE="${UNDERLINE:-$'\e[4m'}"
+      NC="${NC:-$'\e[0m'}"
+    fi
+    RED="${RED:-$'\e[31m'}"
+    GREEN="${GREEN:-$'\e[32m'}"
+    YELLOW="${YELLOW:-$'\e[33m'}"
+    BLUE="${BLUE:-$'\e[34m'}"
+    MAGENTA="${MAGENTA:-$'\e[35m'}"
+    CYAN="${CYAN:-$'\e[36m'}"
+  else
+    # Not a TTY and not forced → disable colors (empty strings avoid set -u issues)
+    BOLD=""; UNDERLINE=""; NC=""
+    RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""
+  fi
+
+  COLORS_INITIALIZED=1
+  # Export so subshells (sudo -E env ...) get the same styling if you preserve env
+  export BOLD UNDERLINE NC RED GREEN YELLOW BLUE MAGENTA CYAN COLORS_INITIALIZED
+}
 
 # logs steps for elk env file for history
 log_step() {
@@ -112,19 +145,18 @@ spinner() {
   local pid=$!
   local delay=0.1
   local spinstr='|/-\'
-  local msg="$1"
+  local msg="${1:-Working...}"   # <— default to avoid unbound var with set -u
 
   printf "%s " "$msg"
-
-  while ps -p $pid > /dev/null 2>&1; do
-    for i in $(echo $spinstr | fold -w1); do
-      printf "\r%s %s" "$msg" "$i"
-      sleep $delay
+  while kill -0 "$pid" 2>/dev/null; do
+    for ((i=0; i<${#spinstr}; i++)); do
+      printf '\r%s %s' "$msg" "${spinstr:i:1}"
+      sleep "$delay"
     done
   done
-
-  printf "\r%s [✔]\n" "$msg"
+  printf '\r%s [✔]\n' "$msg"
 }
+
 
 # Spinner specifically for elastic-agent download/extraction
 spinner_agent_download() {
@@ -401,6 +433,7 @@ pause_and_return_to_menu() {
   read
 }
 
+# Function to uninstall zeek cleanly
 uninstall_and_cleanup_zeek() {
     echo -e "${GREEN}🔍 Checking for existing Zeek installation...${NC}"
     local found=false
