@@ -2,8 +2,7 @@
 
 ELK-Bash contains a collection of Bash scripts that automate the installation and hardening of the Elastic Stack (Elasticsearch, Logstash and Kibana) on Ubuntu.  The scripts can deploy a single node or build out additional nodes, install Fleet Server and Elastic Agent, and even prepare an air‑gapped Elastic Package Registry for offline environments.  Firewall hardening options and a TMUX based monitoring helper are included to streamline the entire setup.
 
-
-<img width="1773" height="925" alt="image" src="https://github.com/user-attachments/assets/ce9d9b8e-9bb8-4174-96e3-1a2826b0e942" />
+<img width="797" height="510" alt="image" src="https://github.com/user-attachments/assets/4fdf6435-fa87-4bf8-8f0c-01170ad67150" />
 
 
 ## Repository layout
