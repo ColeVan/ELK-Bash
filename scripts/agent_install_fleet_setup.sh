@@ -314,9 +314,24 @@ sudo touch /var/log/kibana/kibana.log
 sudo chown kibana:kibana /var/log/kibana/kibana.log
 sudo chmod 644 /var/log/kibana/kibana.log
 
-# Restart Kibana to apply changes
-echo -e "${YELLOW}Restarting Kibana to apply changes for logging.${NC}"
+# Set Kibana to listen on 443
+KIBANA_YML="/etc/kibana/kibana.yml"
+sudo sed -i -E 's|^#?\s*server\.port:.*|server.port: 443|' "$KIBANA_YML" \
+  || echo 'server.port: 443' | sudo tee -a "$KIBANA_YML" >/dev/null
+
+# Allow the service to bind to privileged ports (<1024) via systemd
+sudo mkdir -p /etc/systemd/system/kibana.service.d
+sudo tee /etc/systemd/system/kibana.service.d/override.conf >/dev/null <<'CONF'
+[Service]
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+CONF
+
+sudo systemctl daemon-reload
 sudo systemctl restart kibana
+
+echo -e "${YELLOW}Restarting Kibana to apply changes.${NC}"
 check_service kibana
 sleep 10 & spinner
 
@@ -339,46 +354,7 @@ echo -e "${GREEN}Elasticsearch cluster health status: ${YELLOW}${CLUSTER_STATUS}
 add_to_summary_table "Cluster Status" "$CLUSTER_STATUS"
 
 # Output completion message
-echo -e "${GREEN}Access Kibana at:${NC} ${BLUE}https://${KIBANA_HOST}:5601${NC}"
-add_to_summary_table "Kibana WebUI IP" "https://${KIBANA_HOST}:5601"
+echo -e "${GREEN}Access Kibana at:${NC} ${BLUE}https://${KIBANA_HOST}${NC}"
+add_to_summary_table "Kibana WebUI IP" "https://${KIBANA_HOST}"
 
-# === Setting file output var for Token Gen Configuration ===
-TOKEN_FILE="./enrollment_tokens.txt"
-
-if [[ "$DEPLOYMENT_TYPE" == "cluster" ]]; then
-    # Token Generation for Adding Additional Elasticsearch Nodes
-    echo -e "${GREEN}Setup complete for the initial Elasticsearch node.${NC}"
-    echo -e "${GREEN}You are about to generate enrollment tokens for follow-on nodes in the cluster.${NC}"
-
-    read -p "$(echo -e ${GREEN}'Would you like to continue generating tokens for the other nodes? (y/n): '${NC})" CONFIRM_TOKEN
-    if [[ "$CONFIRM_TOKEN" =~ ^[Yy]$ ]]; then
-        echo -e "${GREEN}Generating enrollment tokens for additional nodes...${NC}"
-        > "$TOKEN_FILE"  # Clear file if it exists
-
-        for ((i = 2; i <= NODE_COUNT; i++)); do
-            echo -e "${GREEN}Generating token for node ${i}...${NC}"
-
-            sudo bash -c "echo 'Node ${i}:' >> '$TOKEN_FILE'; /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node >> '$TOKEN_FILE' 2>&1; echo '' >> '$TOKEN_FILE'"
-
-            # Optional: Check if token was appended
-            if ! tail -n 5 "$TOKEN_FILE" | grep -q '^ey'; then
-                echo -e "${RED}Warning: Token for node ${i} may not have been generated correctly.${NC}"
-            fi
-        done
-
-        if grep -q '^ey' "$TOKEN_FILE"; then
-            echo -e "${GREEN}All generated tokens have been saved to:${NC} ${CYAN}${TOKEN_FILE}${NC}"
-            echo -e "${YELLOW}‼️  These tokens are valid for only 20 minutes! ‼️${NC}"
-        else
-            echo -e "${RED}No valid tokens were successfully generated.${NC}"
-            echo -e "${YELLOW}You can manually attempt to generate a token using:${NC}"
-            echo -e "${CYAN}sudo /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s node${NC}"
-        fi
-
-        echo -e "${GREEN}--- Contents of ${TOKEN_FILE} ---${NC}"
-        cat "$TOKEN_FILE"
-    else
-        echo -e "${GREEN}Token generation skipped by user.${NC}"
-    fi
-fi
 

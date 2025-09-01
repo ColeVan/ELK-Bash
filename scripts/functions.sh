@@ -211,45 +211,84 @@ add_to_summary_table() {
   SUMMARY_TABLE+=("$key|$value")
 }
 
-# Render the table nicely (ASCII-safe)
+# Global table store (set -u safe)
+declare -ga SUMMARY_TABLE=() 2>/dev/null || true
+
+reset_summary_table() { SUMMARY_TABLE=(); }
+add_to_summary_table() { SUMMARY_TABLE+=("${1:-}|${2:-}"); }
+
+# truthy -> Yes/No
+bool_yesno() { bool_true "${1:-}"; [[ $? -eq 0 ]] && echo "Yes" || echo "No"; }
+
+# Build rows from .elk_env + live state so table shows even when steps are skipped
+populate_summary_rows() {
+  load_env
+  reset_summary_table
+
+  local dep="${DEPLOYMENT_TYPE:-single}"
+  local ver="${ELASTIC_VERSION:-unknown}"
+
+  # service_install_ok handles non-zero internally via 'if ...; then' so it's -e safe here
+  local svc_state; if service_install_ok; then svc_state="Installed"; else svc_state="Not Installed"; fi
+
+  local air="$(bool_yesno "${AIRGAPPED_MODE:-false}")"
+  local epr="$(bool_yesno "${EPR_CONFIGURED:-false}")"
+  local agent="$(bool_yesno "${AGENT_FLEET_SETUP:-false}")"
+  local remote="$(bool_yesno "${REMOTE_DEPLOY_TRIGGERED:-false}")"
+
+  local remote_ready="No"
+  if [[ "${DEPLOYMENT_TYPE,,}" == "cluster" ]] \
+     && bool_true "${SERVICE_INSTALL:-false}" \
+     && bool_true "${AGENT_FLEET_SETUP:-false}" \
+     && ! bool_true "${REMOTE_DEPLOY_TRIGGERED:-false}"
+  then
+    remote_ready="Yes"
+  fi
+
+  [[ -n "${DEPLOY_STARTED:-}" ]] && add_to_summary_table "Deploy Started" "${DEPLOY_STARTED}"
+
+  add_to_summary_table "Deployment Type" "$dep"
+  add_to_summary_table "Elastic Version" "$ver"
+  add_to_summary_table "Core Services Installed" "$svc_state"
+  add_to_summary_table "Airgapped Mode" "$air"
+  add_to_summary_table "EPR Configured" "$epr"
+  add_to_summary_table "Agent/Fleet Setup" "$agent"
+  add_to_summary_table "Remote Deploy Triggered" "$remote"
+  add_to_summary_table "Remote Deploy Ready" "$remote_ready"
+}
+
+# Robust ASCII table printer (no crash if empty/unset; ANSI-safe widths optional)
 print_summary_table() {
-  local border="-"
-  local corner="+"
+  local rows=()
+  if declare -p SUMMARY_TABLE >/dev/null 2>&1; then
+    rows=("${SUMMARY_TABLE[@]}")
+  fi
 
-  # Find max widths
-  local max_key=0
-  local max_val=0
-  for row in "${SUMMARY_TABLE[@]}"; do
-    IFS='|' read -r key val <<< "$row"
-    [[ ${#key} -gt $max_key ]] && max_key=${#key}
-    [[ ${#val} -gt $max_val ]] && max_val=${#val}
+  # Optional: strip ANSI for width calc (keeps colors in printed cells)
+  strip_ansi() { sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g'; }
+
+  local max_key=5 max_val=5 row key val sk sv
+  for row in "${rows[@]}"; do
+    IFS='|' read -r key val <<<"$row"
+    sk="$(printf '%s' "${key:-}" | strip_ansi)"; sv="$(printf '%s' "${val:-}" | strip_ansi)"
+    (( ${#sk} > max_key )) && max_key=${#sk}
+    (( ${#sv} > max_val )) && max_val=${#sv}
   done
 
-  local total=$((max_key + max_val + 7))
+  local sep="+-$(printf '%*s' "$max_key" '' | tr ' ' '-')-+-$(printf '%*s' "$max_val" '' | tr ' ' '-')-+"
+  echo "$sep"
+  printf "| %-*s | %-*s |\n" "$max_key" "Input" "$max_val" "Value"
+  echo "$sep"
 
-  # Top border
-  printf '%s' "$corner"
-  printf '%*s' $total '' | tr ' ' "$border"
-  printf '%s\n' "$corner"
-
-  # Header
-  printf "| %-*s | %-*s |\n" $max_key "Input" $max_val "Value"
-
-  # Header bottom border
-  printf '%s' "$corner"
-  printf '%*s' $total '' | tr ' ' "$border"
-  printf '%s\n' "$corner"
-
-  # Rows
-  for row in "${SUMMARY_TABLE[@]}"; do
-    IFS='|' read -r key val <<< "$row"
-    printf "| %-*s | %-*s |\n" $max_key "$key" $max_val "$val"
-  done
-
-  # Bottom border
-  printf '%s' "$corner"
-  printf '%*s' $total '' | tr ' ' "$border"
-  printf '%s\n' "$corner"
+  if ((${#rows[@]} == 0)); then
+    printf "| %-*s | %-*s |\n" "$max_key" "(no items)" "$max_val" ""
+  else
+    for row in "${rows[@]}"; do
+      IFS='|' read -r key val <<<"$row"
+      printf "| %-*s | %-*s |\n" "$max_key" "${key:-}" "$max_val" "${val:-}"
+    done
+  fi
+  echo "$sep"
 }
 
 secure_node_with_iptables() {
@@ -605,5 +644,213 @@ extract_agent() {
         exit 1
     fi
 }
+
+# --- Function to clean up any existing ELK stack and Elastic Agent ---
+perform_elk_cleanup() {
+    echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
+    echo "           This may take a few minutes — Go grab a coffee!"
+    echo -e "${NC}\n"
+
+    # Detect SSH vs local TTY
+    local SSH_MODE=false
+    if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]]; then
+      SSH_MODE=true
+    fi
+
+    # Spinner (you can run long ops in background & pass their PID to this)
+    spinner() {
+        local pid=$1 delay=0.1 spinstr='|/-\\'
+        while ps -p "$pid" > /dev/null 2>&1; do
+            local temp=${spinstr#?}
+            printf " [%c]  " "$spinstr"
+            spinstr=$temp${spinstr%"$temp"}
+            sleep $delay
+            printf "\b\b\b\b\b\b"
+        done
+        printf "    \b\b\b\b"
+    }
+
+    # Safer unit detection + kills
+    unit_present() { systemctl cat "${1}.service" >/dev/null 2>&1; }
+    kill_unit_procs() {
+        local svc="$1"
+        sudo systemctl kill -s TERM "$svc" 2>/dev/null || true
+        sleep 1
+        sudo systemctl kill -s KILL "$svc" 2>/dev/null || true
+    }
+    # Narrow process kill patterns to avoid touching sshd
+    kill_match() {
+        local rx="$1" pids
+        pids="$(pgrep -f "$rx" 2>/dev/null || true)"
+        if [[ -n "$pids" ]]; then
+            echo -e "${CYAN}Killing stray processes matching: ${rx}${NC}"
+            # shellcheck disable=SC2086
+            sudo kill -TERM $pids 2>/dev/null || true
+            sleep 1
+            # shellcheck disable=SC2086
+            sudo kill -KILL $pids 2>/dev/null || true
+        fi
+    }
+
+    # Stop and disable services (even if not running)
+    for svc in elasticsearch logstash kibana; do
+        if unit_present "$svc"; then
+            echo -e "${CYAN}Stopping and disabling $svc...${NC}"
+            sudo systemctl stop "$svc" 2>/dev/null || echo -e "${YELLOW}Could not stop $svc or it was not running.${NC}"
+            sudo systemctl disable "$svc" 2>/dev/null || echo -e "${YELLOW}Could not disable $svc or it was not enabled.${NC}"
+        else
+            echo -e "${YELLOW}$svc unit not present. Skipping systemd stop...${NC}"
+        fi
+
+        # Kill lingering processes (SSH-safe sequence)
+        echo -e "${CYAN}Killing any remaining $svc processes...${NC}"
+        kill_unit_procs "$svc"  # scoped to the unit's cgroup
+
+        # Tight process signatures by component
+        case "$svc" in
+          elasticsearch) kill_match 'org\.elasticsearch\.bootstrap\.Elasticsearch|/usr/share/elasticsearch' ;;
+          logstash)      kill_match 'org\.logstash\.Logstash|/usr/share/logstash' ;;
+          kibana)        kill_match '/usr/share/kibana|node .*kibana' ;;
+        esac
+
+        # As a last resort, only when NOT in SSH, fall back to the broad match you had
+        if ! $SSH_MODE; then
+          sudo pkill -f "$svc" 2>/dev/null || echo -e "${YELLOW}No lingering $svc processes found.${NC}"
+        fi
+    done
+
+    # Elastic Agent cleanup
+    echo -e "${CYAN}Checking for Elastic Agent cleanup...${NC}"
+    if unit_present "elastic-agent"; then
+        echo -e "${CYAN}Stopping and disabling elastic-agent...${NC}"
+        sudo systemctl stop elastic-agent 2>/dev/null || true
+        sudo systemctl disable elastic-agent 2>/dev/null || true
+        kill_unit_procs "elastic-agent"
+    fi
+    if pgrep -x elastic-agent >/dev/null 2>&1; then
+        echo -e "${YELLOW}Elastic Agent process detected. Terminating...${NC}"
+        sudo pkill -x elastic-agent 2>/dev/null || true
+        echo -e "${GREEN}✔ Elastic Agent process terminated.${NC}"
+    else
+        echo -e "${GREEN}No running Elastic Agent process found.${NC}"
+    fi
+
+    if [[ -d "/opt/Elastic" ]]; then
+        echo -e "${YELLOW}Removing existing Elastic Agent installation at /opt/Elastic...${NC}"
+        sudo rm -rf /opt/Elastic
+        echo -e "${GREEN}✔ Elastic Agent directory removed successfully.${NC}"
+    else
+        echo -e "${GREEN}No Elastic Agent directory found at /opt/Elastic. Skipping...${NC}"
+    fi
+
+    if [[ -f "/etc/systemd/system/elastic-agent.service" ]]; then
+        echo -e "${YELLOW}Found systemd unit file for Elastic Agent. Cleaning up...${NC}"
+        sudo systemctl disable elastic-agent 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/elastic-agent.service || true
+        # Reload unit files; avoid daemon-reexec over SSH
+        if $SSH_MODE; then
+          sudo systemctl daemon-reload || true
+        else
+          if [[ "${ALLOW_SYSTEMD_REEXEC:-false}" == "true" ]]; then
+            sudo systemctl daemon-reexec || sudo systemctl daemon-reload || true
+          else
+            sudo systemctl daemon-reload || true
+          fi
+        fi
+        echo -e "${GREEN}✔ Removed stale elastic-agent systemd service.${NC}"
+    else
+        echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
+    fi
+
+    # --- Docker Cleanup for Elastic Package Registry (only if docker present) ---
+    if command -v docker >/dev/null 2>&1; then
+      echo -e "${CYAN}Cleaning up Elastic Package Registry Docker resources...${NC}"
+      mapfile -t EPR_CONTAINERS < <(docker ps -aq --filter "ancestor=docker.elastic.co/package-registry/distribution" 2>/dev/null || true)
+      if ((${#EPR_CONTAINERS[@]})); then
+        echo -e "${YELLOW}Stopping and removing container(s):${NC}\n${EPR_CONTAINERS[*]}"
+        docker stop "${EPR_CONTAINERS[@]}" >/dev/null 2>&1 || true
+        docker rm   "${EPR_CONTAINERS[@]}" >/dev/null 2>&1 || true
+        echo -e "${GREEN}✔ Containers stopped and removed.${NC}"
+      else
+        echo -e "${GREEN}No EPR containers found.${NC}"
+      fi
+
+      mapfile -t EPR_IMAGE_IDS < <(
+        docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" 2>/dev/null \
+        | awk '$1 ~ /^docker\.elastic\.co\/package-registry\/distribution:/ {print $2}' \
+        | sort -u
+      ) || true
+      if ((${#EPR_IMAGE_IDS[@]})); then
+        echo -e "${YELLOW}Removing image(s):${NC}\n${EPR_IMAGE_IDS[*]}"
+        docker rmi -f "${EPR_IMAGE_IDS[@]}" >/dev/null 2>&1 \
+          && echo -e "${GREEN}✔ Image(s) removed.${NC}" \
+          || echo -e "${RED}⚠ Failed to remove some images.${NC}"
+      else
+        echo -e "${GREEN}No EPR images found. Skipping image removal...${NC}"
+      fi
+    else
+      echo -e "${YELLOW}Docker not found. Skipping EPR Docker cleanup...${NC}"
+    fi
+
+    # Clean home directory artifacts
+    echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
+    shopt -s nullglob
+    local AGENT_TARS=( "$HOME"/elastic-agent-*-linux-*.tar.gz )
+    local AGENT_DIRS=( "$HOME"/elastic-agent-*-linux-* )
+    for file in "${AGENT_TARS[@]}"; do
+        echo -e "${YELLOW}Removing Elastic Agent archive: $(basename "$file")${NC}"
+        rm -f -- "$file" 2>/dev/null || true
+    done
+    for dir in "${AGENT_DIRS[@]}"; do
+        if [[ -d "$dir" ]]; then
+            echo -e "${YELLOW}Removing Elastic Agent directory: $(basename "$dir")${NC}"
+            rm -rf -- "$dir" 2>/dev/null || true
+        fi
+    done
+    shopt -u nullglob
+
+    # Uninstall packages and remove residual directories (best-effort)
+    echo -e "${CYAN}Attempting to uninstall Elasticsearch, Logstash, and Kibana...${NC}"
+    DEBIAN_FRONTEND=noninteractive sudo apt-get purge -y elasticsearch logstash kibana >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive sudo apt-get autoremove -y >/dev/null 2>&1 || true
+
+    local paths_to_clean=(
+        /etc/elasticsearch /etc/logstash /etc/kibana
+        /var/lib/elasticsearch /var/lib/logstash
+        /var/log/elasticsearch /var/log/logstash /var/log/kibana
+        /usr/share/elasticsearch /usr/share/logstash /usr/share/kibana
+        /etc/default/elasticsearch /etc/default/logstash /etc/default/kibana
+        /etc/apt/sources.list.d/elastic-8.x.list
+        /etc/apt/sources.list.d/elastic-9.x.list
+        /etc/systemd/system/elasticsearch.service
+        /etc/systemd/system/logstash.service
+        /etc/systemd/system/kibana.service
+        /lib/systemd/system/elasticsearch.service
+        /lib/systemd/system/logstash.service
+        /lib/systemd/system/kibana.service
+    )
+    for path in "${paths_to_clean[@]}"; do
+        if [[ -e "$path" ]]; then
+            echo -e "${CYAN}Removing $path...${NC}"
+            sudo rm -rf -- "$path" 2>/dev/null || true
+        else
+            echo -e "${YELLOW}Path not found: $path — skipping.${NC}"
+        fi
+    done
+
+    # Final systemd reload (never reexec on SSH)
+    if $SSH_MODE; then
+      sudo systemctl daemon-reload || true
+    else
+      if [[ "${ALLOW_SYSTEMD_REEXEC:-false}" == "true" ]]; then
+        sudo systemctl daemon-reexec || sudo systemctl daemon-reload || true
+      else
+        sudo systemctl daemon-reload || true
+      fi
+    fi
+
+    echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
+}
+
 
 

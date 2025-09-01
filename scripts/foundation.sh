@@ -212,7 +212,6 @@ perform_elk_cleanup() {
     echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
 }
 
-
 # --- User Input Processing ---
 if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
     PREVIOUS_INSTALL=true

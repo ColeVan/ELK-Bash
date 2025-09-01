@@ -25,138 +25,67 @@ if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
   exit 0
 fi
 
-# --- Prompt for ELK install history (SAFE) ---
-printf '\n%b\n' "${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
-while true; do
-  read -rp "$(printf 'Type "%byes%b" if there is a previous installation on this machine, or "%bno%b" to continue with a fresh install: ' "$YELLOW" "$NC" "$YELLOW" "$NC")" INSTALL_RESPONSE
-  case "${INSTALL_RESPONSE,,}" in
-    y|yes) INSTALL_RESPONSE="yes"; PREVIOUS_INSTALL=true; FRESH_INSTALL=false; break;;
-    n|no)  INSTALL_RESPONSE="no";  PREVIOUS_INSTALL=false; FRESH_INSTALL=true;  break;;
-    *)     printf '%b\n' "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}";;
-  esac
-done
+unit_loaded() { [[ "$(systemctl show -p LoadState --value "${1}.service" 2>/dev/null)" == "loaded" ]]; }
+kill_unit_procs() {
+  local svc="$1"
+  sudo systemctl kill -s TERM "$svc" 2>/dev/null || true
+  sleep 1
+  sudo systemctl kill -s KILL "$svc" 2>/dev/null || true
+}
 
-if [[ "$INSTALL_RESPONSE" == "yes" ]]; then
-  echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
+# --- Prompt for ELK install history ---
+echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
+prompt_input "$(echo -e "${GREEN}Type \"${YELLOW}yes${GREEN}\" if there is a previous installation on this machine, or \"${YELLOW}no${GREEN}\" to continue with a fresh install:${NC} ")" INSTALL_RESPONSE
 
-  # Helpers: unit existence + safe kill within service cgroup
-  unit_loaded() { [[ "$(systemctl show -p LoadState --value "${1}.service" 2>/dev/null)" == "loaded" ]]; }
-  kill_unit_procs() {
-    local svc="$1"
-    sudo systemctl kill -s TERM "$svc" 2>/dev/null || true
-    sleep 1
-    sudo systemctl kill -s KILL "$svc" 2>/dev/null || true
+# --- User Input Processing ---
+if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
+    PREVIOUS_INSTALL=true
+    FRESH_INSTALL=false
+    perform_elk_cleanup
+
+elif [[ "$INSTALL_RESPONSE" =~ ^[Nn][Oo]$ ]]; then
+  echo -e "${YELLOW}User reported this is a clean install. Verifying for any remnants...${NC}"
+
+  # robust detection (handles inactive/disabled/leftovers)
+  unit_exists() { systemctl cat "${1}.service" >/dev/null 2>&1; }  # unit file present
+  pkg_installed() {
+    local s; s="$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)"
+    [[ "$s" == *"install ok installed"* ]]
+  }
+  artifacts_present() {
+    local n="$1"
+    [[ -e "/etc/$n" || -e "/var/lib/$n" || -e "/var/log/$n" || -e "/usr/share/$n" ]]
   }
 
-  # Stop/disable and ensure no lingering procs (NO pkill -f)
+  SERVICES_FOUND=false
+  FOUND_SERVICES=()
   for svc in elasticsearch logstash kibana; do
-    if unit_loaded "$svc"; then
-      echo -e "${CYAN}Stopping and disabling $svc...${NC}"
-      sudo systemctl stop "$svc" 2>/dev/null || true
-      sudo systemctl disable "$svc" 2>/dev/null || true
-      echo -e "${CYAN}Ensuring no lingering $svc processes...${NC}"
-      kill_unit_procs "$svc"
-    else
-      echo -e "${YELLOW}$svc service not found. Skipping systemd stop...${NC}"
+    if systemctl is-active --quiet "$svc" \
+       || unit_exists "$svc" \
+       || systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^${svc}\.service" \
+       || pkg_installed "$svc" \
+       || artifacts_present "$svc"
+    then
+      echo -e "${RED}Detected ${svc} remnants (running/unit/package/files).${NC}"
+      FOUND_SERVICES+=("$svc")
+      SERVICES_FOUND=true
     fi
   done
 
-  # --- Elastic Agent cleanup (service-aware; no broad pkill) ---
-  if unit_loaded "elastic-agent"; then
-    echo -e "${CYAN}Stopping and disabling elastic-agent...${NC}"
-    sudo systemctl stop elastic-agent 2>/dev/null || true
-    sudo systemctl disable elastic-agent 2>/dev/null || true
-    kill_unit_procs "elastic-agent"
+  if $SERVICES_FOUND; then
+    echo -e "${YELLOW}⚠️  Found ELK components present: ${CYAN}${FOUND_SERVICES[*]}${NC}"
+    echo -e "${YELLOW}Proceeding with cleanup of old services and files...${NC}"
+    PREVIOUS_INSTALL=true
+    FRESH_INSTALL=false
+    perform_elk_cleanup           # <- SSH-safe cleanup function below
   else
-    # Fallback: kill exact process name if present
-    if pgrep -x elastic-agent >/dev/null 2>&1; then
-      echo -e "${YELLOW}Elastic Agent process detected. Terminating...${NC}"
-      pkill -x elastic-agent 2>/dev/null || true
-      echo -e "${GREEN}✔ Elastic Agent process terminated.${NC}"
-    else
-      echo -e "${GREEN}No running Elastic Agent process found.${NC}"
-    fi
+    echo -e "${GREEN}System appears clean. Proceeding with fresh install...${NC}"
+    PREVIOUS_INSTALL=false
+    FRESH_INSTALL=true
   fi
 
-  # Remove Elastic Agent install dir
-  if [[ -d "/opt/Elastic" ]]; then
-    echo -e "${YELLOW}Removing existing Elastic Agent installation at /opt/Elastic...${NC}"
-    sudo rm -rf /opt/Elastic
-    echo -e "${GREEN}✔ Elastic Agent directory removed successfully.${NC}"
-  else
-    echo -e "${GREEN}No Elastic Agent directory found at /opt/Elastic. Skipping...${NC}"
-  fi
-
-  # Remove lingering systemd unit (agent)
-  if [[ -f "/etc/systemd/system/elastic-agent.service" ]]; then
-    echo -e "${YELLOW}Found systemd unit file for Elastic Agent. Cleaning up...${NC}"
-    sudo systemctl disable elastic-agent 2>/dev/null || true
-    sudo rm -f /etc/systemd/system/elastic-agent.service
-    sudo systemctl daemon-reexec || true
-    sudo systemctl daemon-reload || true
-    echo -e "${GREEN}✔ Removed stale elastic-agent systemd service.${NC}"
-  else
-    echo -e "${GREEN}No elastic-agent systemd service file found. Skipping...${NC}"
-  fi
-
-  # Cleanup: stale agent artifacts in $HOME
-  echo -e "${GREEN}Scanning for stale Elastic Agent packages in home directory...${NC}"
-  shopt -s nullglob
-  AGENT_TARS=( "$HOME"/elastic-agent-*-linux-x86_64.tar.gz )
-  AGENT_DIRS=( "$HOME"/elastic-agent-*-linux-x86_64 )
-  for file in "${AGENT_TARS[@]}"; do
-    echo -e "${YELLOW}Removing Elastic Agent archive: $(basename "$file")${NC}"
-    rm -f -- "$file"
-  done
-  for dir in "${AGENT_DIRS[@]}"; do
-    if [[ -d "$dir" ]]; then
-      echo -e "${YELLOW}Removing Elastic Agent directory: $(basename "$dir")${NC}"
-      rm -rf -- "$dir"
-    fi
-  done
-  shopt -u nullglob
-  echo -e "${GREEN}✔ Finished cleaning up Elastic Agent artifacts in home directory.${NC}"
-
-  # Uninstall packages (don’t let set -e nuke the script)
-  echo -e "${CYAN}Attempting to uninstall Elasticsearch, Logstash, and Kibana...${NC}"
-  set +e
-  sudo apt-get purge -y elasticsearch logstash kibana >/dev/null 2>&1
-  sudo apt-get autoremove -y >/dev/null 2>&1
-  set -e
-
-  # Remove directories and files (only if they exist)
-  paths_to_clean=(
-    /etc/elasticsearch /etc/logstash /etc/kibana
-    /var/lib/elasticsearch /var/lib/logstash
-    /var/log/elasticsearch /var/log/logstash /var/log/kibana
-    /usr/share/elasticsearch /usr/share/logstash /usr/share/kibana
-    /etc/apt/sources.list.d/elastic-8.x.list
-    /etc/apt/sources.list.d/elastic-9.x.list
-  )
-  for path in "${paths_to_clean[@]}"; do
-    if [[ -e "$path" ]]; then
-      echo -e "${CYAN}Removing $path...${NC}"
-      sudo rm -rf -- "$path"
-    else
-      echo -e "${YELLOW}Path not found: $path — skipping.${NC}"
-    fi
-  done
-
-  echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
 else
-  echo -e "${GREEN}Confirmed: Fresh install. Continuing setup...${NC}"
-fi
-
-# Lowercase & trim just in case
-INSTALL_RESPONSE="$(echo "$INSTALL_RESPONSE" | tr '[:upper:]' '[:lower:]' | xargs)"
-
-# Add appropriate row to final output table
-if [[ "$INSTALL_RESPONSE" == "yes" ]]; then
-  add_to_summary_table "Services Cleaned/Reinstalled" "Yes"
-elif [[ "$INSTALL_RESPONSE" == "no" ]]; then
-  add_to_summary_table "First Time Install" "Yes"
-else
-  echo -e "${RED}Invalid response. Please type 'yes' or 'no'.${NC}"
+  echo -e "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}"
   exit 1
 fi
 
@@ -323,14 +252,59 @@ echo -e "${GREEN}Updating package lists and installing prerequisites.${NC}"
 sudo apt-get update > /dev/null 2>&1
 sleep 5 & spinner
 
-# Add Elastic APT repository
-echo -e "${BLUE}Adding Elastic APT repository...${NC}"
-{
-    curl -s https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - > /dev/null 2>&1
-    echo "deb https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list > /dev/null 2>&1
-	echo "deb https://artifacts.elastic.co/packages/9.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-9.x.list > /dev/null 2>&1
-} &
-sleep 5 & spinner "Adding repository..."
+# --- Choose repo by version major; add it; verify; then install ---
+MAJOR="${ELASTIC_VERSION%%.*}"   # "9" from "9.1.3", or "8" from "8.18.2"
+if [[ "$MAJOR" != "8" && "$MAJOR" != "9" ]]; then
+  echo -e "${RED}Unsupported major version: ${ELASTIC_VERSION}. Expect 8.x or 9.x.${NC}"
+  exit 1
+fi
+
+echo -e "${BLUE}Adding Elastic APT repository for ${MAJOR}.x ...${NC}"
+# Clean any previous lists to avoid mix-ups between 8.x and 9.x
+sudo rm -f /etc/apt/sources.list.d/elastic-8.x.list /etc/apt/sources.list.d/elastic-9.x.list 2>/dev/null || true
+
+curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - >/dev/null 2>&1
+echo "deb https://artifacts.elastic.co/packages/${MAJOR}.x/apt stable main" \
+  | sudo tee "/etc/apt/sources.list.d/elastic-${MAJOR}.x.list" >/dev/null
+
+echo -e "${GREEN}✔ Repository added successfully.${NC}"
+
+echo -e "${GREEN}Updating package lists...${NC}"
+if ! sudo apt-get update -y >/dev/null 2>&1; then
+  echo -e "${RED}apt-get update failed. Check network and repo files, then retry.${NC}"
+  exit 1
+fi
+
+# Show what versions are actually available (great for debugging)
+AVAILABLE="$(apt-cache madison elasticsearch | awk '{print $3}' | paste -sd ', ' -)"
+if ! apt-cache madison elasticsearch | awk '{print $3}' | grep -qx "${ELASTIC_VERSION}"; then
+  echo -e "${RED}Requested version ${ELASTIC_VERSION} not found in ${MAJOR}.x repo.${NC}"
+  echo -e "${YELLOW}Available versions:${NC} ${CYAN}${AVAILABLE:-<none>}${NC}"
+  exit 1
+fi
+
+echo -e "${GREEN}Installing Elasticsearch ${ELASTIC_VERSION} ...${NC}"
+if ! sudo apt-get install -y "elasticsearch=${ELASTIC_VERSION}" >/dev/null 2>&1; then
+  echo -e "${RED}Failed to install elasticsearch=${ELASTIC_VERSION}.${NC}"
+  echo -e "${YELLOW}Available versions:${NC} ${CYAN}${AVAILABLE:-<none>}${NC}"
+  exit 1
+fi
+
+# Verify package & critical binaries really exist
+if ! dpkg -s elasticsearch >/dev/null 2>&1; then
+  echo -e "${RED}Elasticsearch package not installed after apt said it did. Aborting.${NC}"
+  exit 1
+fi
+ES_BIN_DIR="/usr/share/elasticsearch/bin"
+if [[ ! -x "${ES_BIN_DIR}/elasticsearch-reconfigure-node" ]]; then
+  echo -e "${RED}elasticsearch-reconfigure-node not found in ${ES_BIN_DIR}.${NC}"
+  echo -e "${YELLOW}Package contents:${NC}"
+  dpkg -L elasticsearch | sed -n 's@.*usr/share/elasticsearch/bin/@@p' | sed 's/^/  - /'
+  echo -e "${YELLOW}This usually means the version wasn’t truly installed (or package layout changed).${NC}"
+  exit 1
+fi
+
+echo -e "${GREEN}✔ Elasticsearch installation verified.${NC}"
 
 echo -e "${GREEN}✔ Repository added successfully.${NC}"
 
@@ -413,16 +387,24 @@ else
 fi
 export CLUSTER_TOKEN
 
-# --- ENROLL THIS NODE *BEFORE* STARTING ES; QUOTE THE TOKEN ---
+# --- ENROLL THIS NODE BEFORE STARTING ES ---
+ES_RECONF="/usr/share/elasticsearch/bin/elasticsearch-reconfigure-node"
 printf '%b\n' "${GREEN}🔐 Enrolling node with cluster using provided token...${NC}"
+
+if [[ ! -x "$ES_RECONF" ]]; then
+  echo -e "${RED}Cannot enroll: ${ES_RECONF} is missing.${NC}"
+  echo -e "${YELLOW}Verify Elasticsearch ${ELASTIC_VERSION} actually installed from the ${MAJOR}.x repo and rerun.${NC}"
+  exit 1
+fi
+
 set +e
-sudo /usr/share/elasticsearch/bin/elasticsearch-reconfigure-node --enrollment-token "$CLUSTER_TOKEN"
+sudo "$ES_RECONF" --enrollment-token "$CLUSTER_TOKEN"
 enroll_rc=$?
 set -e
 if (( enroll_rc != 0 )); then
   printf '%b\n' "${RED}❌ Node enrollment failed (rc=${enroll_rc}).${NC}"
-  printf '%b\n' "${YELLOW}Tip:${NC} Ensure the first node is running and reachable on 9200, and the token hasn’t expired."
-  return 1 2>/dev/null || exit 1
+  printf '%b\n' "${YELLOW}Tip:${NC} Ensure the first node is up on 9200, credentials are correct, and the token is fresh."
+  exit $enroll_rc
 fi
 printf '%b\n' "${GREEN}✔ Node enrollment completed.${NC}"
 
@@ -450,8 +432,7 @@ printf '%b\n' "${GREEN}Checking Elasticsearch status...${NC}"
 check_service elasticsearch
 
 # --- FIXED MESSAGE (COMMON_IP vs ELASTIC_HOST) ---
-printf '%b\n' "${GREEN}✔ This Elasticsearch node will be set up at IP: ${YELLOW}${COMMON_IP}${NC}"
-
+echo -e "${GREEN}✔ This Elasticsearch node will be set up at IP: ${COMMON_IP}${NC}"
 
 echo -e "${GREEN}This node has been successfully added to the Elasticsearch cluster.${NC}"
 echo -e "${GREEN}You can now repeat the process on the next node using the corresponding token generated from the initial node.${NC}"
