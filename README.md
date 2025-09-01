@@ -5,23 +5,6 @@ ELK-Bash contains a collection of Bash scripts that automate the installation an
 <img width="797" height="510" alt="image" src="https://github.com/user-attachments/assets/4fdf6435-fa87-4bf8-8f0c-01170ad67150" />
 
 
-## Repository layout
-
-```
-scripts/
-├── orchestrate.sh               # Menu driven entry point to run setup steps
-├── foundation.sh                # Gathers input and performs cleanup of old installs
-├── service_install_setup.sh     # Installs Elasticsearch, Kibana and Logstash
-├── agent_install_fleet_setup.sh # Installs Elastic Agent/Fleet Server
-├── Elastic_EPR_install.sh       # Optional local package registry for air‑gapped use
-├── deploy_elasticsearch_node.sh # Join additional nodes to an existing cluster
-├── elk_deployment.py            # Launches orchestrate.sh inside a tmux session
-├── functions.sh                 # Shared helper functions
-└── cleanup.sh                   # Removes previous installations
-```
-
-Template configuration files used by the scripts reside in `scripts/elk_templates/`.
-
 ## Prerequisites
 
 - Ubuntu server with `sudo` privileges.
