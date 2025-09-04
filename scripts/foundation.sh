@@ -63,7 +63,16 @@ prompt_input "$(echo -e "${GREEN}Type \"${YELLOW}yes${GREEN}\" if there is a pre
 # --- Function to clean up any existing ELK stack and Elastic Agent ---
 perform_elk_cleanup() {
     echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
-    echo "           This may take a few minutes — Go grab a coffee!"
+    echo -e "${CYAN}"
+    cat <<'EOF'
+              ( (
+               ) )
+            ........
+            |      |]
+            \      /    
+             `----'     
+         Go grab a ☕ — this may take a few minutes!
+EOF
     echo -e "${NC}\n"
 
 	# Spinner function

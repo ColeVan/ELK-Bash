@@ -25,63 +25,10 @@ if [[ ! -f "$ELK_ENV_FILE" ]]; then
   } > "$ELK_ENV_FILE"
 fi
 
-bool_true() {
-  local v="${1:-}"; v="${v//\"/}"; v="${v//\'/}"
-  shopt -s nocasematch
-  [[ "$v" =~ ^(true|yes|y|1|on)$ ]]
-}
-
-load_env() { source "$ELK_ENV_FILE" 2>/dev/null || true; }
-
-persist_kv() {
-  local k="$1" v="$2"
-  mkdir -p "$(dirname "$ELK_ENV_FILE")"; touch "$ELK_ENV_FILE"
-  # exact-key delete; avoid nuking similarly prefixed vars
-  sed -i -E "/^${k}=.*/d" "$ELK_ENV_FILE"
-  echo "${k}=${v}" >> "$ELK_ENV_FILE"
-}
-
-persist_bool() { local k="$1"; bool_true "${2:-false}" && persist_kv "$k" "true" || persist_kv "$k" "false"; }
-
 load_env
 
 # =========================
-# RUNTIME HELPERS
-# =========================
-svc_active() { systemctl is-active --quiet "$1"; }
-
-service_install_ok() {
-  load_env
-  if bool_true "${SERVICE_INSTALL:-}"; then return 0; fi
-  if svc_active elasticsearch && svc_active kibana && svc_active logstash; then
-    type log_step &>/dev/null && log_step "SERVICE_INSTALL" "true" || true
-    persist_bool "SERVICE_INSTALL" "true"
-    load_env
-    return 0
-  fi
-  return 1
-}
-
-require_service_installed() {
-  if service_install_ok; then return 0; fi
-  echo -e "\n${YELLOW}⚠️  This step requires core services to be installed and running.${NC}"
-  echo -e "   ${CYAN}- Elasticsearch${NC}\n   ${CYAN}- Kibana${NC}\n   ${CYAN}- Logstash${NC}\n"
-  echo -e "${GREEN}Run ${CYAN}service_install_setup.sh${GREEN} first (menu option 3) or use full setup (option 1).${NC}"
-  return 1
-}
-
-pause_and_return_to_menu() { echo -e "\n${YELLOW}Press Enter to return to the main menu...${NC}"; read -r; }
-
-# Run a child script via bash (never source), report RC, let caller persist flags
-run_script() {
-  local path="$1"; shift || true
-  if [[ ! -f "$path" ]]; then echo -e "${RED}❌ Script not found:${NC} ${YELLOW}$path${NC}"; return 127; fi
-  chmod +x "$path" 2>/dev/null || true
-  if [[ ! -x "$path" ]]; then bash "$path" "$@"; else "$path" "$@"; fi
-}
-
-# =========================
-# FULL SETUP (RESUMABLE)
+# Run the full ELK setup (RESUMABLE options)
 # =========================
 run_full_setup() {
   clear
@@ -91,7 +38,7 @@ run_full_setup() {
   # Always read the latest state first
   load_env
 
-  # --- NEW: Resume or Start Fresh prompt if an existing .elk_env has state ---
+  #Resume or Start Fresh prompt if an existing .elk_env has state ---
   if [[ -f "$ELK_ENV_FILE" ]] && grep -Eq '^(FOUNDATION_SETUP|SERVICE_INSTALL|AGENT_FLEET_SETUP|AIRGAPPED_MODE|EPR_CONFIGURED|REMOTE_DEPLOY_TRIGGERED|DEPLOYMENT_TYPE)=' "$ELK_ENV_FILE"; then
     # Try to show when it was last modified (best-effort)
     ELK_ENV_MTIME="$(date -r "$ELK_ENV_FILE" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo 'unknown')"
@@ -132,7 +79,6 @@ run_full_setup() {
       echo -e "${GREEN}✔ Resuming from saved state in ${CYAN}${ELK_ENV_FILE}${NC}.${NC}"
     fi
   fi
-  # --- END NEW BLOCK ---
 
   # --- Preflight: show what we think the current state is (no prompts here) ---
   echo -e "${YELLOW}Preflight (.elk_env):${NC}"
@@ -279,77 +225,147 @@ run_full_setup() {
   pause_and_return_to_menu
 }
 
-# =========================
-# UTIL VIEWS / ACTIONS
-# =========================
-view_env_file() {
-  clear
-  echo -e "${CYAN}Displaying contents of ${ELK_ENV_FILE}:${NC}\n"
-  if [[ -f "$ELK_ENV_FILE" ]]; then ${PAGER:-less} "$ELK_ENV_FILE"; else
-    echo -e "${RED}No deployment log found yet.${NC}"; sleep 2
+# --- color fallbacks (add near your other color vars) ---
+: "${BOLD:=$'\e[1m'}"
+: "${DIM:=$'\e[2m'}"
+
+# --- hardened progress bar (tmux-safe, works when values are unset/false) ---
+progress_bar() {
+  local steps=5 done=0
+  [[ "${FOUNDATION_SETUP:-}" == "true" ]] && ((done++))
+  [[ "${SERVICE_INSTALL:-}" == "true" ]] && ((done++))
+  [[ "${AGENT_FLEET_SETUP:-}" == "true" ]] && ((done++))
+  [[ "${EPR_CONFIGURED:-}" == "true" ]] && ((done++))
+  [[ "${FIREWALL_HARDENED:-}" == "true" ]] && ((done++))
+
+  local width=30
+  (( width < 1 )) && width=30
+  local filled=$(( done * width / steps ))
+  (( filled < 0 )) && filled=0
+  (( filled > width )) && filled="$width"
+  local empty=$(( width - filled ))
+
+  # [#####-----] 3/5
+  printf "%b" "${CYAN}[${NC}"
+  if (( filled > 0 )); then
+    printf "%b" "${GREEN}"; printf "%${filled}s" "" | tr ' ' '#'; printf "%b" "${NC}"
   fi
-}
-
-run_firewall_hardening() {
-  clear
-  echo -e "${GREEN}Running firewall hardening...${NC}"
-  trap 'echo -e "\n${YELLOW}Firewall hardening interrupted. Returning to menu...${NC}"; return 130' SIGINT
-  type secure_node_with_iptables &>/dev/null && secure_node_with_iptables || echo -e "${YELLOW}(secure_node_with_iptables not available)${NC}"
-  type log_step &>/dev/null && log_step "FIREWALL_HARDENING" "true" || true
-  echo -e "\n${GREEN}Firewall configuration complete.${NC}"
-  trap - SIGINT
-  pause_and_return_to_menu
-}
-
-run_elk_cleanup() {
-  clear
-  echo -e "${GREEN}Running ELK cleanup...${NC}"
-  trap 'echo -e "\n${YELLOW}Cleanup interrupted. Returning to menu...${NC}"; return 130' SIGINT
-  # shellcheck source=/dev/null
-  source "$SCRIPT_DIR/cleanup.sh"
-  type log_step &>/dev/null && log_step "CLEANUP_COMPLETE" "true" || true
-  echo -e "\n${GREEN}Cleanup complete.${NC}"
-  trap - SIGINT
-  pause_and_return_to_menu
-}
-
-run_remote_node_deployment() {
-  clear
-  trap 'echo -e "\n${YELLOW}⚠️  Remote Node installation interrupted. Returning to menu...${NC}"; return 130' SIGINT
-  local REMOTE_SCRIPT="$SCRIPT_DIR/run_remote_deploy.sh"
-  if run_script "$REMOTE_SCRIPT"; then
-    type log_step &>/dev/null && log_step "REMOTE_DEPLOY_TRIGGERED" "true" || true
-    persist_bool "REMOTE_DEPLOY_TRIGGERED" "true"
+  if (( empty > 0 )); then
+    printf "%b" "${DIM}"; printf "%${empty}s" "" | tr ' ' '-'; printf "%b" "${NC}"
   fi
-  trap - SIGINT
-  pause_and_return_to_menu
+  printf "%b\n" "${CYAN}] ${GREEN}${done}${NC}/${CYAN}${steps}${NC}"
 }
 
-run_zeek_deploy() {
-  clear
-  trap 'echo -e "\n${YELLOW}⚠️  Zeek installation interrupted. Returning to menu...${NC}"; return 130' SIGINT
-  # shellcheck source=/dev/null
-  source "$SCRIPT_DIR/zeek_deploy.sh"
-  type log_step &>/dev/null && log_step "ZEEK_DEPLOYED" "true" || true
-  trap - SIGINT
-  pause_and_return_to_menu
+legend_line() {
+  echo -e "${DIM}Keys:${NC} ${GREEN}1-12${NC}  ${DIM}|${NC}  ${GREEN}l${NC}=view log  ${DIM}|${NC}  ${GREEN}q${NC}=quit"
 }
 
-run_suricata_deploy() {
-  clear
-  trap 'echo -e "\n${YELLOW}⚠️  Suricata installation interrupted. Returning to menu...${NC}"; return 130' SIGINT
-  # shellcheck source=/dev/null
-  source "$SCRIPT_DIR/suricata_deploy.sh"
-  type log_step &>/dev/null && log_step "SURICATA_DEPLOYED" "true" || true
-  trap - SIGINT
-  pause_and_return_to_menu
+done_chip() {  # usage: done_chip "$VAR"
+  [[ "${1:-}" == "true" ]] && echo -e " ${GREEN}(done)${NC}" || echo ""
+}
+
+# =========================
+# Service status helpers (env-independent)
+# =========================
+unit_exists() { systemctl cat "${1}.service" >/dev/null 2>&1; }
+unit_active() { systemctl is-active --quiet "${1}.service"; }     # returns 0 if active
+pkg_installed() {
+  local s; s="$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)"
+  [[ "$s" == *"install ok installed"* ]]
+}
+
+# Get state for a service (by canonical unit/pkg names)
+# Prints one of: RUNNING | INSTALLED_STOPPED | NOT_INSTALLED
+get_service_state() {
+  local svc="$1" unit="$1" pkg="$1"
+
+  # Map well-known aliases (keep simple; adjust if your unit names differ)
+  case "$svc" in
+    elasticsearch) unit="elasticsearch"; pkg="elasticsearch";;
+    logstash)      unit="logstash";      pkg="logstash";;
+    kibana)        unit="kibana";        pkg="kibana";;
+    elastic-agent) unit="elastic-agent"; pkg="elastic-agent";;
+    *) unit="$svc"; pkg="$svc";;
+  esac
+
+  if unit_active "$unit"; then
+    echo "RUNNING"; return
+  fi
+
+  # If unit exists or package is installed but not running:
+  if unit_exists "$unit" || pkg_installed "$pkg"; then
+    echo "INSTALLED_STOPPED"; return
+  fi
+
+  echo "NOT_INSTALLED"
+}
+
+# Render a colored checkbox for a service state
+status_box() {
+  local state="$1"
+  case "$state" in
+    RUNNING)           printf "[%bx%b]" "$GREEN" "$NC" ;;   # running → green x
+    INSTALLED_STOPPED) printf "[%b!%b]" "$YELLOW" "$NC" ;; # installed but not running
+    NOT_INSTALLED)     printf "[ ]" ;;
+    *)                 printf "[ ]" ;;
+  esac
+}
+
+# Build one-line status row for ES/LS/KB/Agent
+render_service_status_row() {
+  local es ls kb ag
+  es="$(get_service_state elasticsearch)"
+  ls="$(get_service_state logstash)"
+  kb="$(get_service_state kibana)"
+  ag="$(get_service_state elastic-agent)"
+
+  printf "%b" "${CYAN}----------------------------------------------------------------${NC}\n"
+  printf " %bServices%b:  ES %s  |  LS %s  |  KB %s  |  Agent %s\n" \
+    "$BOLD" "$NC" \
+    "$(status_box "$es")" \
+    "$(status_box "$ls")" \
+    "$(status_box "$kb")" \
+    "$(status_box "$ag")"
+
+  printf "           %bLegend%b: %s running   %s installed, stopped   %s not installed\n" \
+    "$DIM" "$NC" \
+    "$(printf '[%bx%b]' "$GREEN" "$NC")" \
+    "$(printf '[%b!%b]' "$YELLOW" "$NC")" \
+    "[ ]"
 }
 
 # =========================
 # MENU
 # =========================
+#
+type service_install_ok &>/dev/null || service_install_ok() { [[ "${SERVICE_INSTALL:-}" == "true" ]]; }
+type require_service_installed &>/dev/null || require_service_installed() { service_install_ok; }
+type pause_and_return_to_menu &>/dev/null || pause_and_return_to_menu() { read -rp "$(echo -e "${YELLOW}Press Enter to return to the menu...${NC}")"; }
+
+: "${BOLD:=$'\e[1m'}"; : "${DIM:=$'\e[2m'}"
+
+# Icon accents (minimal color, no rainbow soup)
+ICO_DEPLOY="${CYAN}🚀${NC}"
+ICO_SETUP="${CYAN}🛠️ ${NC}"
+ICO_SERVICES="${CYAN}📡${NC}"
+ICO_AGENT="${CYAN}🔧${NC}"
+ICO_EPR="${CYAN}📦${NC}"
+ICO_CLEAN="${RED}🗑️ ${NC}"       # destructive / caution
+ICO_WALL="${YELLOW}🧱${NC}"       # firewall
+ICO_LOGS="${CYAN}📜${NC}"
+ICO_REMOTE="${CYAN}🌐${NC}"
+ICO_ZEEK="${CYAN}🔎${NC}"
+ICO_SURI="${CYAN}🕵️ ${NC}"
+ICO_EXIT="${RED}❌${NC}"
+
+# Number style (dimmed green digits)
+num() { printf " ${DIM}%s${NC}" "$1"; }
+
 main_menu() {
   clear
+  load_env 2>/dev/null || true
+
+  #
   if service_install_ok; then
     OPT4_NOTE=""; OPT5_NOTE=""; OPT4_LOCK=""; OPT5_LOCK=""
   else
@@ -358,24 +374,70 @@ main_menu() {
     OPT4_LOCK="🔒 "; OPT5_LOCK="🔒 "
   fi
 
-  echo -e "${CYAN}"
-  echo "========================================="
-  echo "      🛠️  ELK Stack Deployment Menu       "
-  echo "========================================="
-  echo -e "${NC}"
-  echo -e " ${GREEN}1${NC}. Deploy Elasticsearch, Logstash, and Kibana \"ELK\" on this node"
-  echo -e "    ${YELLOW}↳ Option during setup for remote Elasticsearch node to be setup${NC}"
-  echo -e " ${GREEN}2${NC}. Run foundational setup"
-  echo -e " ${GREEN}3${NC}. Only deploy \"ELK\" services"
-  echo -e " ${GREEN}4${NC}. ${OPT4_LOCK}Deploy elastic agent in Fleet mode on this node${OPT4_NOTE}"
-  echo -e " ${GREEN}5${NC}. ${OPT5_LOCK}Install Elastic Package Registry with Docker ${OPT5_NOTE}"
-  echo -e " ${GREEN}6${NC}. Cleanup all services and start fresh"
-  echo -e " ${GREEN}7${NC}. Firewall hardening IPTables"
-  echo -e " ${GREEN}8${NC}. View deployment log (.elk_env)"
-  echo -e " ${GREEN}9${NC}. Deploy Remote Elasticsearch Node"
-  echo -e " ${GREEN}10${NC}. Deploy Zeek"
-  echo -e " ${GREEN}11${NC}. Deploy Suricata"
-  echo -e " ${GREEN}12${NC}. Exit"
+  #
+  local HOSTNAME="$(hostname 2>/dev/null || echo host)"
+  local IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo -)"
+  local OS_NAME; OS_NAME="$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")"
+
+  echo -e "${CYAN}----------------------------------------------------------------${NC}"
+  echo -e " 🛠️  ${BOLD:-}${GREEN:-}ELK Stack Deployment Menu${NC}"
+  echo -e "${CYAN}----------------------------------------------------------------${NC}"
+  echo -e "[${GREEN}Host${NC}: ${HOSTNAME}] [${GREEN}IP${NC}: ${IP}] [${GREEN}OS${NC}: ${OS_NAME}]"
+  # Real-time service status (does not rely on .elk_env)
+  render_service_status_row
+
+  # --- Status checkboxes ---
+  local svc_box="[ ]";   [[ "${SERVICE_INSTALL:-}" == "true" ]] && svc_box="[${GREEN}x${NC}]"
+  local fleet_box="[ ]"; [[ "${AGENT_FLEET_SETUP:-}" == "true" ]] && fleet_box="[${GREEN}x${NC}]"
+  local epr_box="[ ]";   [[ "${EPR_CONFIGURED:-}" == "true" ]] && epr_box="[${GREEN}x${NC}]"
+
+  echo -e "[${GREEN}Services${NC}: ${svc_box}] \
+  [${GREEN}Fleet${NC}: ${fleet_box}] \
+  [${GREEN}EPR${NC}: ${epr_box}]"
+
+  # --- Storage Usage Bar (root filesystem) ---
+  local USAGE_PERCENT=$(df -h / | awk 'NR==2 {gsub("%","",$5); print $5}')
+  local WIDTH=30
+  local FILLED=$(( USAGE_PERCENT * WIDTH / 100 ))
+  local EMPTY=$(( WIDTH - FILLED ))
+
+  printf "[${GREEN}Storage${NC}: %3s%% " "$USAGE_PERCENT"
+  printf "%b" "${CYAN}[${NC}"
+  if (( FILLED > 0 )); then
+    printf "%b" "${GREEN}"; printf "%${FILLED}s" "" | tr ' ' '#'; printf "%b" "${NC}"
+  fi
+  if (( EMPTY > 0 )); then
+    printf "%b" "${DIM}"; printf "%${EMPTY}s" "" | tr ' ' '-'; printf "%b" "${NC}"
+  fi
+  printf "%b\n" "${CYAN}]${NC}"
+  echo
+  #progress_bar
+  echo
+  
+	# --- Menu body ---
+	printf "%s. %b %s %s\n"    "$(num 1)" "$ICO_DEPLOY" "${BOLD}Deploy Elasticsearch, Logstash, and Kibana \"ELK\" on this node${NC}" ""
+	echo   "    ${YELLOW}↳ Option during setup for remote Elasticsearch node to be setup${NC}"
+
+	printf "%s. %b %s%s\n"     "$(num 2)" "$ICO_SETUP"   "${BOLD}Run foundational setup${NC}"            "$(done_chip "${FOUNDATION_SETUP:-}")"
+	printf "%s. %b %s%s\n"     "$(num 3)" "$ICO_SERVICES" "${BOLD}Only deploy \"ELK\" services${NC}"       "$(done_chip "${SERVICE_INSTALL:-}")"
+
+	# Locks/notes preserved; icon remains tinted, label is bold not colored
+	printf "%s. %s%b %s%s%s\n" "$(num 4)" "${OPT4_LOCK}" "$ICO_AGENT" "${BOLD}Deploy Elastic Agent in Fleet mode on this node${NC}" \
+								 "${OPT4_NOTE}" "$(done_chip "${AGENT_FLEET_SETUP:-}")"
+
+	printf "%s. %s%b %s%s%s\n" "$(num 5)" "${OPT5_LOCK}" "$ICO_EPR"   "${BOLD}Install Elastic Package Registry with Docker${NC}" \
+								 " ${OPT5_NOTE}" "$(done_chip "${EPR_CONFIGURED:-}")"
+
+	printf "%s. %b %s\n"       "$(num 6)" "$ICO_CLEAN"  "${BOLD}Cleanup all services and start fresh${NC}"
+	printf "%s. %b %s%s\n"     "$(num 7)" "$ICO_WALL"   "${BOLD}Firewall Hardening (iptables)${NC}"      "$(done_chip "${FIREWALL_HARDENED:-}")"
+	printf "%s. %b %s\n"       "$(num 8)" "$ICO_LOGS"   "${BOLD}View deployment log (.elk_env)${NC}"
+	printf "%s. %b %s\n"       "$(num 9)" "$ICO_REMOTE" "${BOLD}Deploy Remote Elasticsearch Node${NC}"
+	printf "%s. %b %s\n"       "$(num 10)" "$ICO_ZEEK"  "${BOLD}Deploy Zeek (local)${NC}"
+	printf "%s. %b %s\n"       "$(num 11)" "$ICO_SURI"  "${BOLD}Deploy Suricata (local)${NC}"
+	printf "%s. %b %s\n"       "$(num 12)" "$ICO_EXIT"  "${BOLD}Exit${NC}"
+	echo
+
+  legend_line
   echo
   echo -e " ${YELLOW}💡 Tip:${NC} If setup is interrupted or breaks, you can rerun the menu with:"
   echo -e "    ${CYAN}bash ./orchestrate.sh${NC}"
@@ -394,8 +456,11 @@ main_menu() {
     10) run_zeek_deploy ;;
     11) run_suricata_deploy ;;
     12) echo -e "${GREEN}Exiting setup. Goodbye!${NC}"; exit 0 ;;
+	l|L) clear; view_env_file; pause_and_return_to_menu ;;
+    q|Q) echo -e "${GREEN}Exiting setup. Goodbye!${NC}"; exit 0 ;;
     *) echo -e "${RED}Invalid option. Please try again.${NC}"; sleep 2 ;;
   esac
 }
 
 while true; do main_menu; done
+

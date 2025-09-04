@@ -1,5 +1,5 @@
 #!/bin/bash
-# Common utility functions for deployment scripts
+# utility functions for deployment scripts
 
 # Initialize color/style variables safely.
 # Usage: init_colors            # normal (no override if already inited)
@@ -851,6 +851,121 @@ perform_elk_cleanup() {
 
     echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
 }
+
+# =========================
+# display env file
+# =========================
+view_env_file() {
+  clear
+  echo -e "${CYAN}Displaying contents of ${ELK_ENV_FILE}:${NC}\n"
+  if [[ -f "$ELK_ENV_FILE" ]]; then ${PAGER:-less} "$ELK_ENV_FILE"; else
+    echo -e "${RED}No deployment log found yet.${NC}"; sleep 2
+  fi
+}
+
+run_firewall_hardening() {
+  clear
+  echo -e "${GREEN}Running firewall hardening...${NC}"
+  trap 'echo -e "\n${YELLOW}Firewall hardening interrupted. Returning to menu...${NC}"; return 130' SIGINT
+  type secure_node_with_iptables &>/dev/null && secure_node_with_iptables || echo -e "${YELLOW}(secure_node_with_iptables not available)${NC}"
+  type log_step &>/dev/null && log_step "FIREWALL_HARDENING" "true" || true
+  echo -e "\n${GREEN}Firewall configuration complete.${NC}"
+  trap - SIGINT
+  pause_and_return_to_menu
+}
+
+run_elk_cleanup() {
+  clear
+  echo -e "${GREEN}Running ELK cleanup...${NC}"
+  trap 'echo -e "\n${YELLOW}Cleanup interrupted. Returning to menu...${NC}"; return 130' SIGINT
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/cleanup.sh"
+  type log_step &>/dev/null && log_step "CLEANUP_COMPLETE" "true" || true
+  echo -e "\n${GREEN}Cleanup complete.${NC}"
+  trap - SIGINT
+  pause_and_return_to_menu
+}
+
+run_remote_node_deployment() {
+  clear
+  trap 'echo -e "\n${YELLOW}⚠️  Remote Node installation interrupted. Returning to menu...${NC}"; return 130' SIGINT
+  local REMOTE_SCRIPT="$SCRIPT_DIR/run_remote_deploy.sh"
+  if run_script "$REMOTE_SCRIPT"; then
+    type log_step &>/dev/null && log_step "REMOTE_DEPLOY_TRIGGERED" "true" || true
+    persist_bool "REMOTE_DEPLOY_TRIGGERED" "true"
+  fi
+  trap - SIGINT
+  pause_and_return_to_menu
+}
+
+run_zeek_deploy() {
+  clear
+  trap 'echo -e "\n${YELLOW}⚠️  Zeek installation interrupted. Returning to menu...${NC}"; return 130' SIGINT
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/zeek_deploy.sh"
+  type log_step &>/dev/null && log_step "ZEEK_DEPLOYED" "true" || true
+  trap - SIGINT
+  pause_and_return_to_menu
+}
+
+run_suricata_deploy() {
+  clear
+  trap 'echo -e "\n${YELLOW}⚠️  Suricata installation interrupted. Returning to menu...${NC}"; return 130' SIGINT
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/suricata_deploy.sh"
+  type log_step &>/dev/null && log_step "SURICATA_DEPLOYED" "true" || true
+  trap - SIGINT
+  pause_and_return_to_menu
+}
+
+#child script via bash
+run_script() {
+  local path="$1"; shift || true
+  if [[ ! -f "$path" ]]; then echo -e "${RED}❌ Script not found:${NC} ${YELLOW}$path${NC}"; return 127; fi
+  chmod +x "$path" 2>/dev/null || true
+  if [[ ! -x "$path" ]]; then bash "$path" "$@"; else "$path" "$@"; fi
+}
+
+service_install_ok() {
+  load_env
+  if bool_true "${SERVICE_INSTALL:-}"; then return 0; fi
+  if svc_active elasticsearch && svc_active kibana && svc_active logstash; then
+    type log_step &>/dev/null && log_step "SERVICE_INSTALL" "true" || true
+    persist_bool "SERVICE_INSTALL" "true"
+    load_env
+    return 0
+  fi
+  return 1
+}
+
+require_service_installed() {
+  if service_install_ok; then return 0; fi
+  echo -e "\n${YELLOW}⚠️  This step requires core services to be installed and running.${NC}"
+  echo -e "   ${CYAN}- Elasticsearch${NC}\n   ${CYAN}- Kibana${NC}\n   ${CYAN}- Logstash${NC}\n"
+  echo -e "${GREEN}Run ${CYAN}service_install_setup.sh${GREEN} first (menu option 3) or use full setup (option 1).${NC}"
+  return 1
+}
+
+bool_true() {
+  local v="${1:-}"; v="${v//\"/}"; v="${v//\'/}"
+  shopt -s nocasematch
+  [[ "$v" =~ ^(true|yes|y|1|on)$ ]]
+}
+
+load_env() { source "$ELK_ENV_FILE" 2>/dev/null || true; }
+
+persist_kv() {
+  local k="$1" v="$2"
+  mkdir -p "$(dirname "$ELK_ENV_FILE")"; touch "$ELK_ENV_FILE"
+  sed -i -E "/^${k}=.*/d" "$ELK_ENV_FILE"
+  echo "${k}=${v}" >> "$ELK_ENV_FILE"
+}
+
+persist_bool() { local k="$1"; bool_true "${2:-false}" && persist_kv "$k" "true" || persist_kv "$k" "false"; }
+
+svc_active() { systemctl is-active --quiet "$1"; }
+
+pause_and_return_to_menu() { echo -e "\n${YELLOW}Press Enter to return to the main menu...${NC}"; read -r; }
 
 
 

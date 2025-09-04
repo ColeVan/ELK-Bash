@@ -247,73 +247,130 @@ while true; do
     fi
 done
 
-# Update
-echo -e "${GREEN}Updating package lists and installing prerequisites.${NC}"
-sudo apt-get update > /dev/null 2>&1
-sleep 5 & spinner
+# -----------------------------
+# Elasticsearch installation (deb vs internet)
+# -----------------------------
+install_elasticsearch_selected_method() {
+  : "${INSTALL_FROM_DEB:=}"                 # "1" for local .deb, "0" for internet
+  : "${ES_DEB_LOCAL:=}"                     # path to local .deb when INSTALL_FROM_DEB=1
+  : "${ES_DEB_VERSION:=}"                   # may be passed from runner
+  : "${ES_VERSION:=}"                       # may be passed from runner
+  : "${ELASTIC_VERSION:=}"                  # you already prompted this earlier
 
-# --- Choose repo by version major; add it; verify; then install ---
-MAJOR="${ELASTIC_VERSION%%.*}"   # "9" from "9.1.3", or "8" from "8.18.2"
-if [[ "$MAJOR" != "8" && "$MAJOR" != "9" ]]; then
-  echo -e "${RED}Unsupported major version: ${ELASTIC_VERSION}. Expect 8.x or 9.x.${NC}"
-  exit 1
-fi
+  # Prefer the most specific version hint we have
+  local TARGET_VERSION="${ES_DEB_VERSION:-${ELASTIC_VERSION:-${ES_VERSION:-}}}"
+  if [[ -z "$TARGET_VERSION" ]]; then
+    echo -e "${RED}No target version provided (ES_DEB_VERSION / ELASTIC_VERSION / ES_VERSION).${NC}"
+    exit 1
+  fi
 
-echo -e "${BLUE}Adding Elastic APT repository for ${MAJOR}.x ...${NC}"
-# Clean any previous lists to avoid mix-ups between 8.x and 9.x
-sudo rm -f /etc/apt/sources.list.d/elastic-8.x.list /etc/apt/sources.list.d/elastic-9.x.list 2>/dev/null || true
+  # Helper for optional spinner
+  _spin() { if type -t spinner >/dev/null 2>&1; then sleep "${2:-2}" & spinner "${1:-}"; fi; }
 
-curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add - >/dev/null 2>&1
-echo "deb https://artifacts.elastic.co/packages/${MAJOR}.x/apt stable main" \
-  | sudo tee "/etc/apt/sources.list.d/elastic-${MAJOR}.x.list" >/dev/null
+  if [[ "$INSTALL_FROM_DEB" == "1" ]]; then
+    # ----------------------------
+    # Local .deb path (air-gapped)
+    # ----------------------------
+    echo -e "${GREEN}Installing Elasticsearch from local deb: ${CYAN}${ES_DEB_LOCAL}${NC}"
+    if [[ -z "$ES_DEB_LOCAL" || ! -f "$ES_DEB_LOCAL" ]]; then
+      echo -e "${RED}ES_DEB_LOCAL is not a file: ${ES_DEB_LOCAL:-<empty>}${NC}"
+      exit 1
+    fi
 
-echo -e "${GREEN}✔ Repository added successfully.${NC}"
+    # Install prerequisites for dpkg fixups
+    sudo apt-get update -y >/dev/null 2>&1 || true
+    sudo apt-get install -y apt-transport-https ca-certificates gnupg curl >/dev/null 2>&1 || true
 
-echo -e "${GREEN}Updating package lists...${NC}"
-if ! sudo apt-get update -y >/dev/null 2>&1; then
-  echo -e "${RED}apt-get update failed. Check network and repo files, then retry.${NC}"
-  exit 1
-fi
+    # Install the .deb and fix deps if needed
+    if ! sudo dpkg -i "$ES_DEB_LOCAL" >/dev/null 2>&1; then
+      echo -e "${YELLOW}Resolving dependencies via apt-get -f install...${NC}"
+      sudo apt-get -f install -y >/dev/null 2>&1 || {
+        echo -e "${RED}Failed to resolve dependencies for ${ES_DEB_LOCAL}.${NC}"
+        exit 1
+      }
+    fi
 
-# Show what versions are actually available (great for debugging)
-AVAILABLE="$(apt-cache madison elasticsearch | awk '{print $3}' | paste -sd ', ' -)"
-if ! apt-cache madison elasticsearch | awk '{print $3}' | grep -qx "${ELASTIC_VERSION}"; then
-  echo -e "${RED}Requested version ${ELASTIC_VERSION} not found in ${MAJOR}.x repo.${NC}"
-  echo -e "${YELLOW}Available versions:${NC} ${CYAN}${AVAILABLE:-<none>}${NC}"
-  exit 1
-fi
+    # Verify version
+    local INSTALLED_VER
+    INSTALLED_VER="$(dpkg-query -W -f='${Version}\n' elasticsearch 2>/dev/null || true)"
+    if [[ -z "$INSTALLED_VER" ]]; then
+      echo -e "${RED}Elasticsearch not installed after dpkg run.${NC}"
+      exit 1
+    fi
+    echo -e "${GREEN}✔ Installed Elasticsearch version: ${YELLOW}${INSTALLED_VER}${NC}"
+    if [[ "$INSTALLED_VER" != "$TARGET_VERSION" ]]; then
+      echo -e "${YELLOW}⚠ Version mismatch (wanted ${TARGET_VERSION}). Continuing, but verify compatibility.${NC}"
+    fi
 
-echo -e "${GREEN}Installing Elasticsearch ${ELASTIC_VERSION} ...${NC}"
-if ! sudo apt-get install -y "elasticsearch=${ELASTIC_VERSION}" >/dev/null 2>&1; then
-  echo -e "${RED}Failed to install elasticsearch=${ELASTIC_VERSION}.${NC}"
-  echo -e "${YELLOW}Available versions:${NC} ${CYAN}${AVAILABLE:-<none>}${NC}"
-  exit 1
-fi
+  else
+    # ----------------------------
+    # Internet (APT repository)
+    # ----------------------------
+    echo -e "${GREEN}Installing Elasticsearch ${YELLOW}${TARGET_VERSION}${GREEN} from Elastic APT repo...${NC}"
 
-# Verify package & critical binaries really exist
-if ! dpkg -s elasticsearch >/dev/null 2>&1; then
-  echo -e "${RED}Elasticsearch package not installed after apt said it did. Aborting.${NC}"
-  exit 1
-fi
-ES_BIN_DIR="/usr/share/elasticsearch/bin"
-if [[ ! -x "${ES_BIN_DIR}/elasticsearch-reconfigure-node" ]]; then
-  echo -e "${RED}elasticsearch-reconfigure-node not found in ${ES_BIN_DIR}.${NC}"
-  echo -e "${YELLOW}Package contents:${NC}"
-  dpkg -L elasticsearch | sed -n 's@.*usr/share/elasticsearch/bin/@@p' | sed 's/^/  - /'
-  echo -e "${YELLOW}This usually means the version wasn’t truly installed (or package layout changed).${NC}"
-  exit 1
-fi
+    # Install pre-reqs
+    echo -e "${GREEN}Updating package lists and prerequisites.${NC}"
+    sudo apt-get update -y >/dev/null 2>&1 || true
+    sudo apt-get install -y apt-transport-https ca-certificates gnupg curl >/dev/null 2>&1 || true
+    _spin "Preparing install" 1
 
-echo -e "${GREEN}✔ Elasticsearch installation verified.${NC}"
+    # Add correct repo for major version
+    local MAJOR="${TARGET_VERSION%%.*}"
+    if [[ "$MAJOR" != "8" && "$MAJOR" != "9" ]]; then
+      echo -e "${RED}Unsupported major version: ${TARGET_VERSION}. Expected 8.x or 9.x.${NC}"
+      exit 1
+    fi
 
-echo -e "${GREEN}✔ Repository added successfully.${NC}"
+    echo -e "${BLUE}Configuring Elastic ${MAJOR}.x APT repository (signed-by keyring)...${NC}"
+    sudo install -m 0755 -d /usr/share/keyrings
+    curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch \
+      | sudo gpg --dearmor -o /usr/share/keyrings/elastic-archive-keyring.gpg >/dev/null 2>&1
+    sudo rm -f /etc/apt/sources.list.d/elastic-8.x.list /etc/apt/sources.list.d/elastic-9.x.list 2>/dev/null || true
+    echo "deb [signed-by=/usr/share/keyrings/elastic-archive-keyring.gpg] https://artifacts.elastic.co/packages/${MAJOR}.x/apt stable main" \
+      | sudo tee "/etc/apt/sources.list.d/elastic-${MAJOR}.x.list" >/dev/null
 
-# Install Elasticsearch
-sudo apt-get update > /dev/null 2>&1
-sleep 2 & spinner "Updating package lists"
-sudo apt-get install -y "elasticsearch=$ELASTIC_VERSION" > /dev/null 2>&1
-sleep 2 & spinner "Installing Elasticsearch version $ELASTIC_VERSION"
-echo -e "${GREEN}✔ Elasticsearch installation completed successfully.${NC}"
+    echo -e "${GREEN}✔ Repository added.${NC}"
+    echo -e "${GREEN}Updating package lists...${NC}"
+    if ! sudo apt-get update -y >/dev/null 2>&1; then
+      echo -e "${RED}apt-get update failed. Check network / repo config and retry.${NC}"
+      exit 1
+    fi
+
+    # Confirm requested version exists in repo
+    local AVAILABLE
+    AVAILABLE="$(apt-cache madison elasticsearch | awk '{print $3}' | paste -sd ', ' -)"
+    if ! apt-cache madison elasticsearch | awk '{print $3}' | grep -qx "${TARGET_VERSION}"; then
+      echo -e "${RED}Requested version ${TARGET_VERSION} not found in ${MAJOR}.x repo.${NC}"
+      echo -e "${YELLOW}Available versions:${NC} ${CYAN}${AVAILABLE:-<none>}${NC}"
+      exit 1
+    fi
+
+    echo -e "${GREEN}Installing elasticsearch=${TARGET_VERSION} ...${NC}"
+    if ! sudo apt-get install -y "elasticsearch=${TARGET_VERSION}" >/dev/null 2>&1; then
+      echo -e "${RED}Failed to install elasticsearch=${TARGET_VERSION}.${NC}"
+      echo -e "${YELLOW}Available versions:${NC} ${CYAN}${AVAILABLE:-<none>}${NC}"
+      exit 1
+    fi
+    echo -e "${GREEN}✔ Elasticsearch ${TARGET_VERSION} installed from repo.${NC}"
+  fi
+
+  # Common post-checks (both paths)
+  if ! dpkg -s elasticsearch >/dev/null 2>&1; then
+    echo -e "${RED}Elasticsearch package not installed. Aborting.${NC}"
+    exit 1
+  fi
+  local ES_BIN_DIR="/usr/share/elasticsearch/bin"
+  if [[ ! -x "${ES_BIN_DIR}/elasticsearch-reconfigure-node" ]]; then
+    echo -e "${RED}Missing ${ES_BIN_DIR}/elasticsearch-reconfigure-node after install.${NC}"
+    echo -e "${YELLOW}Package contents:${NC}"
+    dpkg -L elasticsearch | sed -n 's@.*usr/share/elasticsearch/bin/@@p' | sed 's/^/  - /'
+    exit 1
+  fi
+  echo -e "${GREEN}✔ Elasticsearch installation verified.${NC}"
+}
+
+# >>> Call the function (replaces your previous install block) <<<
+install_elasticsearch_selected_method
 
 sleep 5 & spinner "Configuring Elasticsearch..."
 echo -e "${GREEN}✔ Time to join nodes together and create a cluster.${NC}"
