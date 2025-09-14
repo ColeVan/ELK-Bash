@@ -997,6 +997,8 @@ svc_active() { systemctl is-active --quiet "$1"; }
 pause_and_return_to_menu() { echo -e "\n${YELLOW}Press Enter to return to the main menu...${NC}"; read -r; }
 
 # Cyber-themed, all-green matrix rain (Bash)
+# Inspired by https://github.com/wick3dr0se
+# Credit to https://github.com/wick3dr0se
 # Presets (-p): hex | bin | leet | ioc | dns | ascii
 # Examples:
 #   matrix_rain                  # default (green ASCII rain)
