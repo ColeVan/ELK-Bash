@@ -17,13 +17,16 @@ EOF
 echo -e "${NC}"
 
 echo -e "${GREEN}This portion of the script is intended to deploy an Elasticsearch node which will be joined to your cluster.${NC}"
-read -r -p "$(echo -e "${GREEN}Do you want to continue? (yes/no): ${NC}")" CONFIRM
+echo -e "  ${YELLOW}1${NC}) ${GREEN}Yes — continue with Elasticsearch node deployment${NC}"
+echo -e "  ${YELLOW}2${NC}) ${GREEN}No  — exit without changes${NC}"
+read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" CONFIRM_CHOICE
+CONFIRM_CHOICE="${CONFIRM_CHOICE:-1}"
 
-# Exit unless the user explicitly answers y/yes (case-insensitive)
-if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
-  echo -e "${GREEN}Exiting script. No changes made.${NC}"
-  exit 0
-fi
+case "$CONFIRM_CHOICE" in
+  1) echo -e "${GREEN}✔ Continuing...${NC}" ;;
+  2) echo -e "${GREEN}Exiting script. No changes made.${NC}"; exit 0 ;;
+  *) echo -e "${YELLOW}⚠ Invalid input, defaulting to continue.${NC}" ;;
+esac
 
 unit_loaded() { [[ "$(systemctl show -p LoadState --value "${1}.service" 2>/dev/null)" == "loaded" ]]; }
 kill_unit_procs() {
@@ -33,138 +36,216 @@ kill_unit_procs() {
   sudo systemctl kill -s KILL "$svc" 2>/dev/null || true
 }
 
-# --- Prompt for ELK install history ---
+# --- Prompt for ELK install history (1/2 style) ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
-prompt_input "$(echo -e "${GREEN}Type \"${YELLOW}yes${GREEN}\" if there is a previous installation on this machine, or \"${YELLOW}no${GREEN}\" to continue with a fresh install:${NC} ")" INSTALL_RESPONSE
+echo -e "  ${YELLOW}1${NC}) ${GREEN}Yes — resume/cleanup existing installation${NC}"
+echo -e "  ${YELLOW}2${NC}) ${GREEN}No  — perform a fresh install${NC}"
+read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" INSTALL_CHOICE
+INSTALL_CHOICE="${INSTALL_CHOICE:-1}"
 
-# --- User Input Processing ---
-if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
+case "$INSTALL_CHOICE" in
+  1)
     PREVIOUS_INSTALL=true
     FRESH_INSTALL=false
     perform_elk_cleanup
+    ;;
+  2)
+    echo -e "${YELLOW}User reported this is a clean install. Verifying for any remnants...${NC}"
 
-elif [[ "$INSTALL_RESPONSE" =~ ^[Nn][Oo]$ ]]; then
-  echo -e "${YELLOW}User reported this is a clean install. Verifying for any remnants...${NC}"
+    unit_exists() { systemctl cat "${1}.service" >/dev/null 2>&1; }
+    pkg_installed() {
+      local s; s="$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)"
+      [[ "$s" == *"install ok installed"* ]]
+    }
+    artifacts_present() {
+      local n="$1"
+      [[ -e "/etc/$n" || -e "/var/lib/$n" || -e "/var/log/$n" || -e "/usr/share/$n" ]]
+    }
 
-  # robust detection (handles inactive/disabled/leftovers)
-  unit_exists() { systemctl cat "${1}.service" >/dev/null 2>&1; }  # unit file present
-  pkg_installed() {
-    local s; s="$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)"
-    [[ "$s" == *"install ok installed"* ]]
-  }
-  artifacts_present() {
-    local n="$1"
-    [[ -e "/etc/$n" || -e "/var/lib/$n" || -e "/var/log/$n" || -e "/usr/share/$n" ]]
-  }
+    SERVICES_FOUND=false
+    FOUND_SERVICES=()
+    for svc in elasticsearch logstash kibana; do
+      if systemctl is-active --quiet "$svc" \
+         || unit_exists "$svc" \
+         || systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^${svc}\.service" \
+         || pkg_installed "$svc" \
+         || artifacts_present "$svc"
+      then
+        echo -e "${RED}Detected ${svc} remnants (running/unit/package/files).${NC}"
+        FOUND_SERVICES+=("$svc")
+        SERVICES_FOUND=true
+      fi
+    done
 
-  SERVICES_FOUND=false
-  FOUND_SERVICES=()
-  for svc in elasticsearch logstash kibana; do
-    if systemctl is-active --quiet "$svc" \
-       || unit_exists "$svc" \
-       || systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^${svc}\.service" \
-       || pkg_installed "$svc" \
-       || artifacts_present "$svc"
-    then
-      echo -e "${RED}Detected ${svc} remnants (running/unit/package/files).${NC}"
-      FOUND_SERVICES+=("$svc")
-      SERVICES_FOUND=true
+    if $SERVICES_FOUND; then
+      echo -e "${YELLOW}⚠️  Found ELK components present: ${CYAN}${FOUND_SERVICES[*]}${NC}"
+      echo -e "  ${YELLOW}1${NC}) ${GREEN}Clean up old ELK services and continue${NC}"
+      echo -e "  ${YELLOW}2${NC}) ${GREEN}Abort — I will handle cleanup manually${NC}"
+      read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" CLEAN_CHOICE
+      CLEAN_CHOICE="${CLEAN_CHOICE:-1}"
+      case "$CLEAN_CHOICE" in
+        1)
+          PREVIOUS_INSTALL=true
+          FRESH_INSTALL=false
+          perform_elk_cleanup
+          ;;
+        2)
+          echo -e "${RED}Cleanup skipped. Exiting.${NC}"
+          exit 1
+          ;;
+        *)
+          echo -e "${YELLOW}⚠ Invalid input, defaulting to cleanup.${NC}"
+          PREVIOUS_INSTALL=true
+          FRESH_INSTALL=false
+          perform_elk_cleanup
+          ;;
+      esac
+    else
+      echo -e "${GREEN}System appears clean. Proceeding with fresh install...${NC}"
+      PREVIOUS_INSTALL=false
+      FRESH_INSTALL=true
     fi
-  done
-
-  if $SERVICES_FOUND; then
-    echo -e "${YELLOW}⚠️  Found ELK components present: ${CYAN}${FOUND_SERVICES[*]}${NC}"
-    echo -e "${YELLOW}Proceeding with cleanup of old services and files...${NC}"
+    ;;
+  *)
+    echo -e "${YELLOW}⚠ Invalid input, defaulting to 'Yes' (cleanup).${NC}"
     PREVIOUS_INSTALL=true
     FRESH_INSTALL=false
-    perform_elk_cleanup           # <- SSH-safe cleanup function below
-  else
-    echo -e "${GREEN}System appears clean. Proceeding with fresh install...${NC}"
-    PREVIOUS_INSTALL=false
-    FRESH_INSTALL=true
-  fi
+    perform_elk_cleanup
+    ;;
+esac
 
-else
-  echo -e "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}"
-  exit 1
+# === Common IP Prompt and Assignment (1/2 style, with detected IP) ===
+echo -e "\n${GREEN}Elasticsearch will be hosted using the IP you choose below.${NC}"
+echo -e "${GREEN}--- Network Interfaces ---${NC}"
+ip -br a | awk '{print $1, $2, $3}' | while read -r iface state addr; do
+  echo -e "${CYAN}$iface${NC} - $state - IP: ${YELLOW}$addr${NC}"
+done
+
+# Detect first non-lo iface with IPv4
+MGMT_IFACE="$(ip -br a | awk '$1 != "lo" && $3 ~ /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1; exit}')"
+MGMT_IP=""
+if [[ -n "${MGMT_IFACE:-}" ]]; then
+  MGMT_IP="$(ip -4 -o addr show dev "$MGMT_IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
 fi
 
-# === Common IP Prompt and Assignment ===
-echo -e "\n${GREEN}Elasticsearch will be hosted using the IP you enter below.${NC}"
-
-echo -e "${GREEN}--- Network Interfaces ---${NC}"
-ip -br a | awk '{print $1, $2, $3}' | while read iface state addr; do
-    echo -e "${CYAN}$iface${NC} - $state - IP: ${YELLOW}$addr${NC}"
-done
-
-# Identify default management interface and IP
-MGMT_IFACE=$(ip -br a | awk '$1 != "lo" && $3 ~ /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1; exit}')
-MGMT_IP=$(ip -4 -o addr show dev "$MGMT_IFACE" | awk '{print $4}' | cut -d/ -f1)
-
-echo -e "${GREEN}Use the following IP for accessing this node (management interface):${NC}"
-echo -e "${CYAN}$MGMT_IFACE${NC} - ${YELLOW}$MGMT_IP${NC}"
-
-# Prompt for IP and validate until correct
-while true; do
-    read -p "$(echo -e "${YELLOW}Enter the IP address to use for Elasticsearch: ${NC}")" COMMON_IP
-    if validate_ip "$COMMON_IP"; then
-        echo -e "${GREEN}✔ Accepted IP: $COMMON_IP${NC}"
-        break
-    else
-        echo -e "${RED}❌ Invalid IP format. Please enter a valid IPv4 address.${NC}"
-    fi
-done
-
-echo -e "${GREEN}✔ This Elasticsearch node will be set up at IP: $ELASTIC_HOST${NC}"
-
-# Add to summary table
-add_to_summary_table "Management IP" "$COMMON_IP"
-
-# Ask if this is an airgapped environment
-echo -e "\n${YELLOW}Is this machine in an airgapped (offline) environment?${NC}"
-prompt_input "Type \"yes\" to skip internet check, or \"no\" to verify connectivity: " IS_AIRGAPPED
-
-if [[ "$IS_AIRGAPPED" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-	echo -e "${YELLOW}Airgapped mode confirmed. Skipping internet connectivity check.${NC}"
+if [[ -n "$MGMT_IFACE" && -n "$MGMT_IP" ]]; then
+  echo -e "${GREEN}Detected management interface and IP:${NC}"
+  echo -e "  ${CYAN}${MGMT_IFACE}${NC} - ${YELLOW}${MGMT_IP}${NC}"
+  echo -e "  ${YELLOW}1${NC}) ${GREEN}Use detected IP (${MGMT_IP})${NC}"
+  echo -e "  ${YELLOW}2${NC}) ${GREEN}Enter a different IP${NC}"
+  read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" IP_CHOICE
+  IP_CHOICE="${IP_CHOICE:-1}"
+  case "$IP_CHOICE" in
+    1) COMMON_IP="$MGMT_IP"; echo -e "${GREEN}✔ Accepted IP: ${COMMON_IP}${NC}" ;;
+    2)
+      while true; do
+        read -rp "$(echo -e "${YELLOW}Enter the IPv4 address to use for Elasticsearch: ${NC}")" COMMON_IP
+        if validate_ip "$COMMON_IP"; then
+          echo -e "${GREEN}✔ Accepted IP: $COMMON_IP${NC}"
+          break
+        else
+          echo -e "${RED}❌ Invalid IP format. Please enter a valid IPv4 address.${NC}"
+        fi
+      done
+      ;;
+    *) echo -e "${YELLOW}⚠ Invalid input, defaulting to detected IP.${NC}"; COMMON_IP="$MGMT_IP" ;;
+  esac
 else
-	# --- Check internet connectivity ---
-	echo -e "\n${GREEN}Checking internet connectivity...${NC}"
-	PING_TARGET="google.com"
-	PING_COUNT=2
+  # No IPv4 detected — prompt manually (you already have a fuller netplan flow elsewhere)
+  while true; do
+    read -rp "$(echo -e "${YELLOW}No IPv4 detected. Enter the IPv4 address to use for Elasticsearch: ${NC}")" COMMON_IP
+    if validate_ip "$COMMON_IP"; then
+      echo -e "${GREEN}✔ Accepted IP: $COMMON_IP${NC}"
+      break
+    else
+      echo -e "${RED}❌ Invalid IP format. Please enter a valid IPv4 address.${NC}"
+    fi
+  done
+fi
 
-	if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
-		echo -e "${GREEN}Internet connectivity confirmed via ping to ${YELLOW}$PING_TARGET.${NC}"
-	else
-		echo -e "${RED}Unable to reach $PING_TARGET. Please verify that this host has internet access.${NC}"
-		read -p "$(echo -e "${YELLOW}Do you want to retry the connectivity check? (yes/no): ${NC}")" RETRY_NET
+ELASTIC_HOST="$COMMON_IP"
+echo -e "${GREEN}✔ This Elasticsearch node will be set up at IP: ${YELLOW}$ELASTIC_HOST${NC}"
+add_to_summary_table "Management IP" "$ELASTIC_HOST"
 
-		if [[ "$RETRY_NET" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-			echo -e "${YELLOW}Retrying ping...${NC}"
-			if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
-				echo -e "${GREEN}Internet connectivity confirmed on retry.${NC}"
-			else
-				echo -e "${RED}Still no internet. Exiting setup.${NC}"
-				exit 1
-			fi
-		else
-			echo -e "${RED}User opted not to retry. Exiting setup.${NC}"
-			exit 1
-		fi
-	fi
+# === Airgapped environment (1/2 style) ===
+echo -e "\n${GREEN}Is this machine in an airgapped (offline) environment?${NC}"
+echo -e "  ${YELLOW}1${NC}) ${GREEN}Yes — skip internet connectivity check${NC}"
+echo -e "  ${YELLOW}2${NC}) ${GREEN}No  — verify internet connectivity${NC}"
+read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" AIRGAP_CHOICE
+AIRGAP_CHOICE="${AIRGAP_CHOICE:-1}"
+
+case "$AIRGAP_CHOICE" in
+  1)
+    echo -e "${YELLOW}Airgapped mode confirmed. Skipping internet connectivity check.${NC}"
+    IS_AIRGAPPED="yes"
+    ;;
+  2)
+    echo -e "\n${GREEN}Checking internet connectivity...${NC}"
+    PING_TARGET="google.com"
+    PING_COUNT=2
+    if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
+      echo -e "${GREEN}Internet connectivity confirmed via ping to ${YELLOW}$PING_TARGET.${NC}"
+      IS_AIRGAPPED="no"
+    else
+      echo -e "${RED}Unable to reach $PING_TARGET.${NC}"
+      echo -e "  ${YELLOW}1${NC}) ${GREEN}Retry connectivity check${NC}"
+      echo -e "  ${YELLOW}2${NC}) ${GREEN}Exit setup${NC}"
+      read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" RETRY_CHOICE
+      RETRY_CHOICE="${RETRY_CHOICE:-1}"
+      case "$RETRY_CHOICE" in
+        1)
+          echo -e "${YELLOW}Retrying ping...${NC}"
+          if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
+            echo -e "${GREEN}Internet connectivity confirmed on retry.${NC}"
+            IS_AIRGAPPED="no"
+          else
+            echo -e "${RED}Still no internet. Exiting setup.${NC}"
+            exit 1
+          fi
+          ;;
+        2)
+          echo -e "${RED}User opted not to retry. Exiting setup.${NC}"
+          exit 1
+          ;;
+        *)
+          echo -e "${YELLOW}⚠ Invalid input, defaulting to retry.${NC}"
+          if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
+            echo -e "${GREEN}Internet connectivity confirmed on retry.${NC}"
+            IS_AIRGAPPED="no"
+          else
+            echo -e "${RED}Still no internet. Exiting setup.${NC}"
+            exit 1
+          fi
+          ;;
+      esac
+    fi
+    ;;
+  *)
+    echo -e "${YELLOW}⚠ Invalid input, defaulting to Airgapped (Yes).${NC}"
+    IS_AIRGAPPED="yes"
+    ;;
+esac
+
+# Optional: record in summary (if you use a summary table here too)
+if [[ "$IS_AIRGAPPED" == "yes" ]]; then
+  add_to_summary_table "Airgapped Environment" "Yes"
+else
+  add_to_summary_table "Airgapped Environment" "No"
 fi
 
 # Normalize the input
 IS_AIRGAPPED="$(echo "$IS_AIRGAPPED" | tr '[:upper:]' '[:lower:]' | xargs)"
 
-# Validate and add to summary table
+# === Record Airgap Selection to Summary Table ===
 if [[ "$IS_AIRGAPPED" == "yes" ]]; then
   echo -e "${GREEN}✔ Airgap check skipped.${NC}"
   add_to_summary_table "Airgapped Environment" "Yes"
 elif [[ "$IS_AIRGAPPED" == "no" ]]; then
-  echo -e "${GREEN}✔ Internet connectivity will be verified.${NC}"
+  echo -e "${GREEN}✔ Internet connectivity verified.${NC}"
   add_to_summary_table "Airgapped Environment" "No"
 else
-  echo -e "${RED}❌ Invalid input. Please type 'yes' or 'no'.${NC}"
+  # This should never happen with the 1/2 menu, but kept as a safeguard
+  echo -e "${RED}❌ Unexpected state: IS_AIRGAPPED=${IS_AIRGAPPED}${NC}"
   exit 1
 fi
 
@@ -248,28 +329,33 @@ while true; do
 done
 
 # -----------------------------
-# Elasticsearch installation (deb vs internet)
+# Elasticsearch installation (deb vs internet) - robust online/offline
 # -----------------------------
 install_elasticsearch_selected_method() {
-  : "${INSTALL_FROM_DEB:=}"                 # "1" for local .deb, "0" for internet
-  : "${ES_DEB_LOCAL:=}"                     # path to local .deb when INSTALL_FROM_DEB=1
-  : "${ES_DEB_VERSION:=}"                   # may be passed from runner
-  : "${ES_VERSION:=}"                       # may be passed from runner
-  : "${ELASTIC_VERSION:=}"                  # you already prompted this earlier
+  : "${INSTALL_FROM_DEB:=}"      # "1" => install from local .deb
+  : "${ES_DEB_LOCAL:=}"          # path to elasticsearch-<ver>-amd64.deb
+  : "${ES_DEB_VERSION:=}"        # preferred explicit version for .deb
+  : "${ES_VERSION:=}"            # fallback version
+  : "${ELASTIC_VERSION:=}"       # fallback version
 
-  # Prefer the most specific version hint we have
   local TARGET_VERSION="${ES_DEB_VERSION:-${ELASTIC_VERSION:-${ES_VERSION:-}}}"
   if [[ -z "$TARGET_VERSION" ]]; then
     echo -e "${RED}No target version provided (ES_DEB_VERSION / ELASTIC_VERSION / ES_VERSION).${NC}"
     exit 1
   fi
 
-  # Helper for optional spinner
+  # Optional spinner helper
   _spin() { if type -t spinner >/dev/null 2>&1; then sleep "${2:-2}" & spinner "${1:-}"; fi; }
+
+  # Quick probe for repo reachability (don't fail script if offline)
+  local APT_ONLINE=0
+  if sudo apt-get update -y >/dev/null 2>&1; then
+    APT_ONLINE=1
+  fi
 
   if [[ "$INSTALL_FROM_DEB" == "1" ]]; then
     # ----------------------------
-    # Local .deb path (air-gapped)
+    # Local .deb path (works online or offline)
     # ----------------------------
     echo -e "${GREEN}Installing Elasticsearch from local deb: ${CYAN}${ES_DEB_LOCAL}${NC}"
     if [[ -z "$ES_DEB_LOCAL" || ! -f "$ES_DEB_LOCAL" ]]; then
@@ -277,29 +363,60 @@ install_elasticsearch_selected_method() {
       exit 1
     fi
 
-    # Install prerequisites for dpkg fixups
-    sudo apt-get update -y >/dev/null 2>&1 || true
-    sudo apt-get install -y apt-transport-https ca-certificates gnupg curl >/dev/null 2>&1 || true
+    # Extract version from the .deb metadata to compare later
+    local DEB_VER
+    DEB_VER="$(dpkg-deb -f "$ES_DEB_LOCAL" Version 2>/dev/null || true)"
 
-    # Install the .deb and fix deps if needed
-    if ! sudo dpkg -i "$ES_DEB_LOCAL" >/dev/null 2>&1; then
-      echo -e "${YELLOW}Resolving dependencies via apt-get -f install...${NC}"
-      sudo apt-get -f install -y >/dev/null 2>&1 || {
-        echo -e "${RED}Failed to resolve dependencies for ${ES_DEB_LOCAL}.${NC}"
+    if (( APT_ONLINE )); then
+      # Online: let apt resolve dependencies from repos in one step
+      echo -e "${GREEN}Repos reachable. Installing with dependency resolution via apt...${NC}"
+      if ! sudo apt-get install -y "$ES_DEB_LOCAL" >/tmp/es_install_apt.log 2>&1; then
+        echo -e "${RED}Failed to install via apt using local .deb.${NC}"
+        echo -e "${YELLOW}See log:${NC} ${CYAN}/tmp/es_install_apt.log${NC}"
         exit 1
-      }
+      fi
+    else
+      # Offline: install from local files only
+      echo -e "${YELLOW}No repo connectivity detected. Installing from local .debs only.${NC}"
+      # First attempt dpkg directly
+      if ! sudo dpkg -i "$ES_DEB_LOCAL" >/tmp/es_dpkg.log 2>&1; then
+        if grep -qi "dependency problems" /tmp/es_dpkg.log; then
+          echo -e "${YELLOW}Unmet deps. Trying local folder resolution (.deb bundle).${NC}"
+          local pkgdir; pkgdir="$(dirname "$ES_DEB_LOCAL")"
+          # Install every .deb in the directory; apt can resolve deps from local files
+          if ! sudo apt-get install -y "${pkgdir}"/*.deb >/tmp/es_local_install.log 2>&1; then
+            echo -e "${RED}Local dependency resolution failed.${NC}"
+            echo -e "${YELLOW}Ensure all required dependency .debs are present in:${NC} ${CYAN}${pkgdir}${NC}"
+            echo -e "${YELLOW}Logs:${NC} ${CYAN}/tmp/es_dpkg.log${NC}, ${CYAN}/tmp/es_local_install.log${NC}"
+            exit 1
+          fi
+        else
+          echo -e "${RED}dpkg failed for a reason other than dependencies.${NC}"
+          echo -e "${YELLOW}See log:${NC} ${CYAN}/tmp/es_dpkg.log${NC}"
+          exit 1
+        fi
+      fi
     fi
 
-    # Verify version
+    # Verify installation + version
     local INSTALLED_VER
     INSTALLED_VER="$(dpkg-query -W -f='${Version}\n' elasticsearch 2>/dev/null || true)"
     if [[ -z "$INSTALLED_VER" ]]; then
-      echo -e "${RED}Elasticsearch not installed after dpkg run.${NC}"
+      echo -e "${RED}Elasticsearch not installed after local .deb path.${NC}"
       exit 1
     fi
+
+    # Normalize comparison (strip Debian revision, e.g., 9.1.3-1 -> 9.1.3)
+    local INSTALLED_BASE="${INSTALLED_VER%%-*}"
+    local TARGET_BASE="${TARGET_VERSION%%-*}"
+    local DEB_BASE="${DEB_VER%%-*}"
+
     echo -e "${GREEN}✔ Installed Elasticsearch version: ${YELLOW}${INSTALLED_VER}${NC}"
-    if [[ "$INSTALLED_VER" != "$TARGET_VERSION" ]]; then
-      echo -e "${YELLOW}⚠ Version mismatch (wanted ${TARGET_VERSION}). Continuing, but verify compatibility.${NC}"
+    if [[ -n "$DEB_VER" && "$DEB_BASE" != "$TARGET_BASE" ]]; then
+      echo -e "${YELLOW}⚠ The .deb version (${DEB_VER}) differs from requested (${TARGET_VERSION}).${NC}"
+    fi
+    if [[ "$INSTALLED_BASE" != "$TARGET_BASE" ]]; then
+      echo -e "${YELLOW}⚠ Installed base version (${INSTALLED_BASE}) differs from requested (${TARGET_BASE}). Verify compatibility.${NC}"
     fi
 
   else
@@ -308,13 +425,10 @@ install_elasticsearch_selected_method() {
     # ----------------------------
     echo -e "${GREEN}Installing Elasticsearch ${YELLOW}${TARGET_VERSION}${GREEN} from Elastic APT repo...${NC}"
 
-    # Install pre-reqs
-    echo -e "${GREEN}Updating package lists and prerequisites.${NC}"
-    sudo apt-get update -y >/dev/null 2>&1 || true
+    echo -e "${GREEN}Installing prerequisites and refreshing package lists...${NC}"
     sudo apt-get install -y apt-transport-https ca-certificates gnupg curl >/dev/null 2>&1 || true
     _spin "Preparing install" 1
 
-    # Add correct repo for major version
     local MAJOR="${TARGET_VERSION%%.*}"
     if [[ "$MAJOR" != "8" && "$MAJOR" != "9" ]]; then
       echo -e "${RED}Unsupported major version: ${TARGET_VERSION}. Expected 8.x or 9.x.${NC}"
@@ -329,8 +443,7 @@ install_elasticsearch_selected_method() {
     echo "deb [signed-by=/usr/share/keyrings/elastic-archive-keyring.gpg] https://artifacts.elastic.co/packages/${MAJOR}.x/apt stable main" \
       | sudo tee "/etc/apt/sources.list.d/elastic-${MAJOR}.x.list" >/dev/null
 
-    echo -e "${GREEN}✔ Repository added.${NC}"
-    echo -e "${GREEN}Updating package lists...${NC}"
+    echo -e "${GREEN}✔ Repository added. Updating package lists...${NC}"
     if ! sudo apt-get update -y >/dev/null 2>&1; then
       echo -e "${RED}apt-get update failed. Check network / repo config and retry.${NC}"
       exit 1
@@ -346,9 +459,10 @@ install_elasticsearch_selected_method() {
     fi
 
     echo -e "${GREEN}Installing elasticsearch=${TARGET_VERSION} ...${NC}"
-    if ! sudo apt-get install -y "elasticsearch=${TARGET_VERSION}" >/dev/null 2>&1; then
+    if ! sudo apt-get install -y "elasticsearch=${TARGET_VERSION}" >/tmp/es_install_repo.log 2>&1; then
       echo -e "${RED}Failed to install elasticsearch=${TARGET_VERSION}.${NC}"
       echo -e "${YELLOW}Available versions:${NC} ${CYAN}${AVAILABLE:-<none>}${NC}"
+      echo -e "${YELLOW}See log:${NC} ${CYAN}/tmp/es_install_repo.log${NC}"
       exit 1
     fi
     echo -e "${GREEN}✔ Elasticsearch ${TARGET_VERSION} installed from repo.${NC}"
@@ -359,6 +473,7 @@ install_elasticsearch_selected_method() {
     echo -e "${RED}Elasticsearch package not installed. Aborting.${NC}"
     exit 1
   fi
+
   local ES_BIN_DIR="/usr/share/elasticsearch/bin"
   if [[ ! -x "${ES_BIN_DIR}/elasticsearch-reconfigure-node" ]]; then
     echo -e "${RED}Missing ${ES_BIN_DIR}/elasticsearch-reconfigure-node after install.${NC}"
@@ -366,10 +481,82 @@ install_elasticsearch_selected_method() {
     dpkg -L elasticsearch | sed -n 's@.*usr/share/elasticsearch/bin/@@p' | sed 's/^/  - /'
     exit 1
   fi
+
   echo -e "${GREEN}✔ Elasticsearch installation verified.${NC}"
 }
 
-# >>> Call the function (replaces your previous install block) <<<
+# -----------------------------
+# Decide install method (Local .deb vs Elastic APT)
+# -----------------------------
+
+# Helper: resolve version inside a .deb so TARGET_VERSION aligns
+extract_deb_version() {
+  local f="$1"
+  dpkg-deb -f "$f" Version 2>/dev/null | sed 's/-.*$//' || true
+}
+
+# If airgapped, force local .deb mode; otherwise ask the user
+if [[ "${IS_AIRGAPPED:-no}" == "yes" ]]; then
+  INSTALL_FROM_DEB="1"
+  echo -e "\n${GREEN}Airgapped mode selected — installing from a local .deb package.${NC}"
+else
+  echo -e "\n${GREEN}Choose Elasticsearch installation source:${NC}"
+  echo -e "  ${YELLOW}1${NC}) ${GREEN}Local .deb file (you provide a package path)${NC}"
+  echo -e "  ${YELLOW}2${NC}) ${GREEN}Elastic APT repository (internet required)${NC}"
+  read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}2${GREEN}): ${NC}")" _SRC_CHOICE
+  _SRC_CHOICE="${_SRC_CHOICE:-2}"
+  case "$_SRC_CHOICE" in
+    1) INSTALL_FROM_DEB="1" ;;
+    2) INSTALL_FROM_DEB="0" ;;
+    *) echo -e "${YELLOW}⚠ Invalid choice, defaulting to APT repo.${NC}"; INSTALL_FROM_DEB="0" ;;
+  esac
+fi
+
+# If using local .deb, locate/ask for the file and harmonize version
+if [[ "$INSTALL_FROM_DEB" == "1" ]]; then
+  # Try a few sensible defaults first
+  CANDIDATES=()
+  [[ -n "${ES_DEB_LOCAL:-}" && -f "$ES_DEB_LOCAL" ]] && CANDIDATES+=("$ES_DEB_LOCAL")
+  CANDIDATES+=("$SCRIPT_DIR/elasticsearch-${ELASTIC_VERSION:-}.deb")
+  CANDIDATES+=("$SCRIPT_DIR/elasticsearch-${ELASTIC_VERSION:-}-amd64.deb")
+  CANDIDATES+=("/tmp/elasticsearch-${ELASTIC_VERSION:-}-amd64.deb")
+
+  ES_DEB_LOCAL_RESOLVED=""
+  for c in "${CANDIDATES[@]}"; do
+    [[ -f "$c" ]] && { ES_DEB_LOCAL_RESOLVED="$c"; break; }
+  done
+
+  if [[ -z "$ES_DEB_LOCAL_RESOLVED" ]]; then
+    while true; do
+      read -rp "$(echo -e "${GREEN}Path to local Elasticsearch .deb (e.g., /path/elasticsearch-${YELLOW}${ELASTIC_VERSION}${GREEN}-amd64.deb): ${NC}")" ES_DEB_LOCAL_RESOLVED
+      [[ -f "$ES_DEB_LOCAL_RESOLVED" ]] && break
+      echo -e "${RED}File not found. Please enter a valid path to the .deb file.${NC}"
+    done
+  fi
+
+  ES_DEB_LOCAL="$ES_DEB_LOCAL_RESOLVED"
+
+  # Align requested version with the .deb’s version (base part, e.g., 9.1.3 from 9.1.3-1)
+  DEB_BASE_VER="$(extract_deb_version "$ES_DEB_LOCAL" | tr -d '\r')"
+  if [[ -n "$DEB_BASE_VER" ]]; then
+    ES_DEB_VERSION="$DEB_BASE_VER"
+    # If user-entered ELASTIC_VERSION differs, prefer the .deb’s version for consistency
+    if [[ -n "${ELASTIC_VERSION:-}" && "${ELASTIC_VERSION%%-*}" != "$DEB_BASE_VER" ]]; then
+      echo -e "${YELLOW}⚠ The .deb version (${DEB_BASE_VER}) differs from the entered version (${ELASTIC_VERSION}). Using ${DEB_BASE_VER}.${NC}"
+      ELASTIC_VERSION="$DEB_BASE_VER"
+    fi
+  fi
+else
+  # APT path: ensure we actually have a version string to use later
+  if [[ -z "${ELASTIC_VERSION:-}" ]]; then
+    while true; do
+      read -rp "$(echo -e "${GREEN}Enter the Elasticsearch version to install from APT (e.g., ${YELLOW}9.1.3${GREEN}): ${NC}")" ELASTIC_VERSION
+      [[ -n "$ELASTIC_VERSION" ]] && break
+    done
+  fi
+fi
+
+# Now perform the installation using the selected method
 install_elasticsearch_selected_method
 
 sleep 5 & spinner "Configuring Elasticsearch..."

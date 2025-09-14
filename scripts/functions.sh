@@ -648,7 +648,16 @@ extract_agent() {
 # --- Function to clean up any existing ELK stack and Elastic Agent ---
 perform_elk_cleanup() {
     echo -e "\n${YELLOW}Starting cleanup of any existing ELK stack components...${NC}"
-    echo "           This may take a few minutes — Go grab a coffee!"
+    echo -e "${CYAN}"
+    cat <<'EOF'
+              ( (
+               ) )
+            ........
+            |      |]
+            \      /    
+             `----'     
+         Go grab a ☕ — this may take a few minutes!
+EOF
     echo -e "${NC}\n"
 
     # Detect SSH vs local TTY
@@ -918,6 +927,26 @@ run_suricata_deploy() {
   pause_and_return_to_menu
 }
 
+run_remote_nsm_deployment() {
+  clear
+  trap 'echo -e "\n${YELLOW}⚠️  Remote NSM installation interrupted. Returning to menu...${NC}"; return 130' SIGINT
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/run_remote_deploy_nsm.sh"
+  type log_step &>/dev/null && log_step "NSM_DEPLOYED" "true" || true
+  trap - SIGINT
+  pause_and_return_to_menu
+}
+
+run_nsm_enroll_remote() {
+  clear
+  trap 'echo -e "\n${YELLOW}⚠️  Remote NSM Agent installation interrupted. Returning to menu...${NC}"; return 130' SIGINT
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/remote_agent_install_nsm.sh"
+  type log_step &>/dev/null && log_step "NSM_AGENT_DEPLOYED" "true" || true
+  trap - SIGINT
+  pause_and_return_to_menu
+}
+
 #child script via bash
 run_script() {
   local path="$1"; shift || true
@@ -966,6 +995,278 @@ persist_bool() { local k="$1"; bool_true "${2:-false}" && persist_kv "$k" "true"
 svc_active() { systemctl is-active --quiet "$1"; }
 
 pause_and_return_to_menu() { echo -e "\n${YELLOW}Press Enter to return to the main menu...${NC}"; read -r; }
+
+# Cyber-themed, all-green matrix rain (Bash)
+# Presets (-p): hex | bin | leet | ioc | dns | ascii
+# Examples:
+#   matrix_rain                  # default (green ASCII rain)
+#   matrix_rain -p hex          # hex nibble rain
+#   matrix_rain -p ioc          # IOC-ish symbols (hash/url-ish)
+#   matrix_rain -C 4            # 4 concurrent drops per tick (denser)
+#   matrix_rain -d 0.05         # faster spawn
+#   matrix_rain -t 10           # run 10s then exit
+#   matrix_rain -M              # multicolor (override green-only)
+#   matrix_rain -A              # draw on current screen (no alt buffer)
+
+matrix_rain() (
+  set -euo pipefail
+
+  # -------- Options ----------
+  local duration=""        # -t seconds (empty = run until Ctrl+C)
+  local density="0.10"     # -d seconds between spawn ticks
+  local symbols='0123456789!@#$%^&*()-_=+[]{}|;:,.<>?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  local colors_csv=""      # -c custom "R;G;B,R;G;B"
+  local preset=""          # -p preset
+  local use_alt_screen=1   # -A disables
+  local concurrency=2      # -C drops per tick (1..10)
+  local green_only=1       # default ON; -M disables
+
+  while getopts ":t:d:s:c:p:C:AM" opt; do
+    case "$opt" in
+      t) duration="$OPTARG" ;;
+      d) density="$OPTARG" ;;
+      s) symbols="$OPTARG" ;;
+      c) colors_csv="$OPTARG" ;;
+      p) preset="$OPTARG" ;;
+      C) concurrency="$OPTARG" ;;
+      A) use_alt_screen=0 ;;      # don't switch to alt screen
+      M) green_only=0 ;;          # enable multicolor mode
+      \?) : ;;                    # ignore unknown flags
+    esac
+  done
+
+  # Clamp concurrency
+  (( concurrency < 1 )) && concurrency=1
+  (( concurrency > 10 )) && concurrency=10
+
+  # -------- Presets ----------
+  case "${preset,,}" in
+    hex)   symbols='0123456789abcdefABCDEF' ;;
+    bin)   symbols='01' ;;
+    leet)  symbols='01134A57$@!#%&*{}[]<>/\\|=+-_:;' ;;
+    ioc)   symbols='abcdef0123456789./:_-%?&' ;;   # hash/url-ish
+    dns)   symbols='abcdefghijklmnopqrstuvwxyz0123456789-.' ;;
+    ascii|"") : ;;
+    *) : ;; # unknown preset => ignore
+  esac
+
+  # -------- Helpers ----------
+  init_term() {
+    (( use_alt_screen )) && printf '\e[?1049h'   # alt screen buffer
+    printf '\e[2J\e[?25l'                        # clear + hide cursor
+
+    # Bash < 4: fall back to `stty size`
+    if (( BASH_VERSINFO[0] < 4 )); then
+      read -r LINES COLUMNS < <(stty size)
+      return
+    fi
+
+    # Query terminal for current size (bottom-right trick)
+    IFS='[;' read -p $'\e[999;999H\e[6n' -rd R -s _ LINES COLUMNS
+  }
+
+  deinit_term() {
+    printf '\e[?25h'            # show cursor
+    (( use_alt_screen )) && printf '\e[?1049l'  # back to main screen
+    stty echo || true
+  }
+
+  print_to() { # $1=text $2=row $3=col $4=R;G;B $5=bold(1)/dim(2)
+    printf '\e[%d;%dH\e[%d;38;2;%sm%s\e[m' "$2" "$3" "${5:-2}" "$4" "$1"
+  }
+
+  # -------- Colors ----------
+  # Default = all green. -M enables multicolor; -c overrides both.
+  local -a colors
+  if [[ -n "$colors_csv" ]]; then
+    IFS=',' read -r -a colors <<<"$colors_csv"
+  else
+    if (( green_only )); then
+      colors=('102;255;102')  # neon green
+    else
+      colors=('102;255;102' '255;176;0' '169;169;169')
+    fi
+  fi
+
+  # One falling column ("drop")
+  rain() {
+    local s="$1"
+    local dropStart dropCol dropLen dropSpeed dropColDim color symbol i
+    (( dropStart = RANDOM % LINES / 9 ))
+    (( dropCol   = RANDOM % COLUMNS + 1 ))
+    (( dropLen   = RANDOM % (LINES/2) + 2 ))
+    (( dropSpeed = RANDOM % 9 + 1 ))
+    (( dropColDim = RANDOM % 4 ))
+    color=${colors[RANDOM % ${#colors[@]}]}
+
+    for (( i = dropStart; i <= LINES + dropLen; i++ )); do
+      symbol=${s:RANDOM % ${#s}:1}
+
+      # bright "head"
+      (( dropColDim )) || print_to "$symbol" "$i" "$dropCol" "$color" 1
+
+      # dim "trail"
+      (( i > dropStart )) && print_to "$symbol" "$((i-1))" "$dropCol" "$color"
+
+      # erase tail beyond length
+      (( i > dropLen )) && printf '\e[%d;%dH \e[m' "$((i-dropLen))" "$dropCol"
+
+      sleep "0.$dropSpeed"
+    done
+  }
+
+  # -------- Runtime ----------
+  export LC_ALL=C
+  init_term
+  stty -echo || true
+
+  trap init_term WINCH            # resize-aware
+  trap 'kill 0; exit' INT         # Ctrl+C kills background drops & exits
+  trap deinit_term EXIT           # always restore terminal
+
+  # main loop
+  if [[ -n "$duration" ]]; then
+    local start end now
+    start=$(date +%s)
+    end=$(( start + duration ))
+    while :; do
+      for ((k=0; k<concurrency; k++)); do
+        rain "$symbols" &
+      done
+      sleep "$density"
+      now=$(date +%s)
+      (( now >= end )) && break
+    done
+  else
+    while :; do
+      for ((k=0; k<concurrency; k++)); do
+        rain "$symbols" &
+      done
+      sleep "$density"
+    done
+  fi
+)
+
+# Minimal launcher — split into policy-then-enroll (refactored)
+deploy_es_agents() {
+  local setup="$SCRIPT_DIR/fleet_policy_setup.sh"
+  local enroll="$SCRIPT_DIR/remote_agent_install.sh"
+  local ELK_ENV_FILE="${ELK_ENV_FILE:-$SCRIPT_DIR/.elk_env}"
+
+  # Ensure executables
+  for f in "$setup" "$enroll"; do
+    [[ -x "$f" ]] || chmod +x "$f" 2>/dev/null || true
+    if [[ ! -x "$f" ]]; then
+      echo -e "${RED}Cannot execute:${NC} ${f}"
+      return 1
+    fi
+  done
+
+  # Optional logs without breaking interactivity (uses 'script' if present)
+  local ts setup_log enroll_log
+  ts="$(date +%Y%m%d_%H%M%S)"
+  setup_log="$SCRIPT_DIR/fleet_policy_setup_${ts}.log"
+  enroll_log="$SCRIPT_DIR/remote_agent_install_${ts}.log"
+
+  echo -e "${CYAN}Preparing Fleet policy and minting enrollment token…${NC}"
+  if command -v script >/dev/null 2>&1 && [[ -t 1 ]]; then
+    # interactive, logged
+    script -q -c "$setup" "$setup_log"
+  else
+    # interactive, not logged
+    "$setup"
+  fi
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo -e "${RED}Policy setup failed.${NC}"
+    [[ -f "$setup_log" ]] && echo -e "${DIM}Log saved to:${NC} ${setup_log}"
+    return $rc
+  fi
+
+  # Pull token from .elk_env (the setup script persists it)
+  if [[ -f "$ELK_ENV_FILE" ]]; then
+    TOKEN="$(grep -E '^ENROLLMENT_TOKEN=' "$ELK_ENV_FILE" 2>/dev/null | sed -E 's/^ENROLLMENT_TOKEN="?([^"]*)"?/\1/')"
+  else
+    TOKEN=""
+  fi
+
+  if [[ -z "$TOKEN" || ${#TOKEN} -lt 20 ]]; then
+    echo -e "${RED}Could not read a valid ENROLLMENT_TOKEN from:${NC} $ELK_ENV_FILE"
+    echo -e "${YELLOW}Make sure fleet_policy_setup.sh completed successfully and wrote the token.${NC}"
+    return 1
+  fi
+
+  echo -e "${GREEN}✔ Enrollment token captured:${NC} ${TOKEN:0:6}…${TOKEN: -4}"
+  [[ -f "$setup_log" ]] && echo -e "${DIM}Log saved to:${NC} ${setup_log}"
+  echo
+  read -r -p "$(echo -e "${GREEN}Proceed to enroll remote Elasticsearch nodes now?${NC} [Enter=yes / type 'no' to cancel]: ")" _ans
+  if [[ "${_ans,,}" == "n" || "${_ans,,}" == "no" ]]; then
+    echo -e "${YELLOW}Enrollment step skipped by user.${NC}"
+    return 0
+  fi
+
+  echo -e "${CYAN}Enrolling remote Elasticsearch nodes with the minted token…${NC}"
+  if command -v script >/dev/null 2>&1 && [[ -t 1 ]]; then
+    script -q -c "$enroll -t \"$TOKEN\"" "$enroll_log"
+  else
+    "$enroll" -t "$TOKEN"
+  fi
+  rc=$?
+
+  if [[ $rc -ne 0 ]]; then
+    echo -e "${RED}Remote agent enrollment reported errors.${NC}"
+    [[ -f "$enroll_log" ]] && echo -e "${DIM}Log saved to:${NC} ${enroll_log}"
+    return $rc
+  fi
+
+  echo -e "${GREEN}✔ Remote agent enrollment completed.${NC}"
+  [[ -f "$enroll_log" ]] && echo -e "${DIM}Log saved to:${NC} ${enroll_log}"
+}
+
+# --- NSM: enroll remote sensor nodes via Elastic Agent ---
+run_nsm_enroll_remote() {
+  clear
+  echo -e "${CYAN}----------------------------------------------------------------${NC}"
+  echo -e " ${BOLD}${GREEN}Enroll Remote NSM Sensor Nodes${NC}"
+  echo -e "${CYAN}----------------------------------------------------------------${NC}"
+
+  local script="$SCRIPT_DIR/remote_agent_install_nsm.sh"
+  if [[ ! -f "$script" ]]; then
+    echo -e "${RED}Missing ${YELLOW}$script${RED}. Put remote_agent_install_nsm.sh next to orchestrate.sh.${NC}"
+    pause_and_return_to_menu; return 1
+  fi
+
+  load_env 2>/dev/null || true
+  local fleet_host="${NSM_FLEET_SERVER_HOST:-${FLEET_SERVER_HOST:-${ELASTIC_HOST:-}}}"
+  local token="${NSM_ENROLLMENT_TOKEN:-${ENROLLMENT_TOKEN:-}}"
+
+  local hosts
+  read -r -p "$(echo -e "${GREEN}Enter comma-separated NSM sensor hosts (IPs or DNS)${NC}: ")" hosts
+
+  if bash "$script" \
+      ${fleet_host:+-e "$fleet_host"} \
+      ${token:+-t "$token"} \
+      ${hosts:+-h "$hosts"}; then
+    [[ -f "$ELK_ENV_FILE" ]] && source "$ELK_ENV_FILE"
+    if [[ -n "${NSM_ENROLLED_HOSTS:-}" ]]; then
+      echo -e "${GREEN}✔ NSM hosts enrolled:${NC} ${NSM_ENROLLED_HOSTS}"
+    fi
+    pause_and_return_to_menu; return 0
+  else
+    echo -e "${RED}❌ One or more enrollments failed.${NC}"
+    pause_and_return_to_menu; return 1
+  fi
+}
+
+
+
+
+
+
+
+
+
+
 
 
 

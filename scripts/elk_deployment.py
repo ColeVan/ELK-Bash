@@ -64,12 +64,12 @@ subprocess.run([
     "tmux", "send-keys", "watch \"ss -tnp state established\"", "C-m"
 ])
 
-# Pane 2: firewall
+# Pane 2: matrix
 subprocess.run([
     "tmux", "select-pane", "-t", f"{SESSION}:0.2"
 ])
 subprocess.run([
-    "tmux", "send-keys", f"source {FUNCTIONS} && secure_node_with_iptables", "C-m"
+    "tmux", "send-keys", f"source {FUNCTIONS} && matrix_rain", "C-m"
 ])
 
 # Pane 3: orchestrate.sh

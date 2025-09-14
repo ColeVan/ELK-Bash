@@ -35,30 +35,98 @@ echo -e "${GREEN}✔ Running with sudo as expected.${NC}"
 # --- Confirm local ELK (Elasticsearch, Logstash, Kibana) deployment with TLS ---
 printf '%b\n' "${CYAN}This will deploy ${YELLOW}Elasticsearch${NC}, ${YELLOW}Logstash${NC}, and ${YELLOW}Kibana${NC} on this node with ${YELLOW}TLS${NC} configured."
 
-# Loop until the user types a valid "yes" or "no"
-while true; do
-  read -rp "$(printf '%b' "${GREEN}Proceed with deployment? Type ${YELLOW}yes${GREEN} or ${RED}no${GREEN}: ${NC}")" CONFIRM_DEPLOY
-  case "${CONFIRM_DEPLOY,,}" in
-    y|yes)
-      printf '%b\n' "${GREEN}✔ Proceeding with ELK+TLS deployment on this node...${NC}"
-      DEPLOY_ELK_TLS="yes"
-      break
-      ;;
-    n|no)
-      printf '%b\n' "${YELLOW}ℹ Deployment canceled by user. No changes made.${NC}"
-      DEPLOY_ELK_TLS="no"
-      # If this script is sourced, return; otherwise exit cleanly.
-      return 0 2>/dev/null || exit 0
-      ;;
-    *)
-      printf '%b\n' "${RED}❌ Invalid input. Please type exactly 'yes' or 'no'.${NC}"
-      ;;
-  esac
-done
+echo -e "  ${YELLOW}1${NC}) ${GREEN}Yes — proceed with ELK+TLS deployment${NC}"
+echo -e "  ${YELLOW}2${NC}) ${GREEN}No  — cancel deployment${NC}"
 
-# --- Prompt for ELK install history ---
+read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" CONFIRM_CHOICE
+CONFIRM_CHOICE="${CONFIRM_CHOICE:-1}"
+
+case "$CONFIRM_CHOICE" in
+  1)
+    printf '%b\n' "${GREEN}✔ Proceeding with ELK+TLS deployment on this node...${NC}"
+    DEPLOY_ELK_TLS="yes"
+    ;;
+  2)
+    printf '%b\n' "${YELLOW}ℹ Deployment canceled by user. No changes made.${NC}"
+    DEPLOY_ELK_TLS="no"
+    # If this script is sourced, return; otherwise exit cleanly.
+    return 0 2>/dev/null || exit 0
+    ;;
+  *)
+    printf '%b\n' "${YELLOW}⚠ Invalid input, defaulting to 'Yes'.${NC}"
+    DEPLOY_ELK_TLS="yes"
+    ;;
+esac
+
+# --- Prompt for ELK install history (1/2, default=1) ---
 echo -e "\n${GREEN}Has Elasticsearch, Logstash, or Kibana ever been installed on this machine before?${NC}"
-prompt_input "$(echo -e "${GREEN}Type \"${YELLOW}yes${GREEN}\" if there is a previous installation on this machine, or \"${YELLOW}no${GREEN}\" to continue with a fresh install:${NC} ")" INSTALL_RESPONSE
+echo -e "  ${YELLOW}1${NC}) ${GREEN}Yes (resume/cleanup existing installation)${NC}"
+echo -e "  ${YELLOW}2${NC}) ${GREEN}No  (perform a fresh install)${NC}"
+
+read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" INSTALL_CHOICE
+INSTALL_CHOICE="${INSTALL_CHOICE:-1}"
+
+case "$INSTALL_CHOICE" in
+  1) INSTALL_RESPONSE="yes" ;;
+  2) INSTALL_RESPONSE="no"  ;;
+  *) echo -e "${YELLOW}⚠ Invalid input, defaulting to 'yes'.${NC}"; INSTALL_RESPONSE="yes" ;;
+esac
+
+# --- User Input Processing ---
+if [[ "$INSTALL_RESPONSE" == "yes" ]]; then
+  PREVIOUS_INSTALL=true
+  FRESH_INSTALL=false
+  perform_elk_cleanup
+
+elif [[ "$INSTALL_RESPONSE" == "no" ]]; then
+  echo -e "${YELLOW}User reported this is a clean install. Verifying if this machine is clean...${NC}"
+
+  SERVICES_FOUND=false
+  for svc in elasticsearch logstash kibana; do
+    if systemctl list-units --type=service | grep -qE "^\s*${svc}\.service"; then
+      echo -e "${RED}Detected ${svc} service on system.${NC}"
+      SERVICES_FOUND=true
+    fi
+  done
+
+  if $SERVICES_FOUND; then
+    echo -e "${YELLOW}⚠️  Found Elasticsearch, Logstash, or Kibana services still present.${NC}"
+    echo -e "  ${YELLOW}1${NC}) ${GREEN}Yes — clean up old ELK services and continue${NC}"
+    echo -e "  ${YELLOW}2${NC}) ${GREEN}No  — abort; I will handle cleanup manually${NC}"
+    read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" CONFIRM_CHOICE
+    CONFIRM_CHOICE="${CONFIRM_CHOICE:-1}"
+
+    case "$CONFIRM_CHOICE" in
+      1)
+        echo -e "${YELLOW}Proceeding with cleanup of old services...${NC}"
+        PREVIOUS_INSTALL=true
+        FRESH_INSTALL=false
+        perform_elk_cleanup
+        ;;
+      2)
+        echo -e "${RED}Cleanup skipped. Cannot proceed while old services exist. Exiting.${NC}"
+        exit 1
+        ;;
+      *)
+        echo -e "${YELLOW}⚠ Invalid input, defaulting to cleanup (Yes).${NC}"
+        PREVIOUS_INSTALL=true
+        FRESH_INSTALL=false
+        perform_elk_cleanup
+        ;;
+    esac
+  else
+    echo -e "${GREEN}System appears clean. Proceeding with fresh install...${NC}"
+    PREVIOUS_INSTALL=false
+    FRESH_INSTALL=true
+  fi
+
+else
+  echo -e "${RED}Unexpected state. Exiting.${NC}"
+  exit 1
+fi
+
+# Lowercase & trim just in case
+INSTALL_RESPONSE="$(echo "$INSTALL_RESPONSE" | tr '[:upper:]' '[:lower:]' | xargs)"
 
 # --- Function to clean up any existing ELK stack and Elastic Agent ---
 perform_elk_cleanup() {
@@ -221,50 +289,6 @@ EOF
     echo -e "${GREEN}✔ Cleanup complete. Proceeding with a fresh installation.${NC}"
 }
 
-# --- User Input Processing ---
-if [[ "$INSTALL_RESPONSE" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-    PREVIOUS_INSTALL=true
-    FRESH_INSTALL=false
-    perform_elk_cleanup
-
-elif [[ "$INSTALL_RESPONSE" =~ ^[Nn][Oo]$ ]]; then
-    echo -e "${YELLOW}User reported this is a clean install. Verifying if indeed this machine is clean...${NC}"
-
-    SERVICES_FOUND=false
-    for svc in elasticsearch logstash kibana; do
-        if systemctl list-units --type=service | grep -q "$svc"; then
-            echo -e "${RED}Detected $svc service on system.${NC}"
-            SERVICES_FOUND=true
-        fi
-    done
-
-    if $SERVICES_FOUND; then
-        echo -e "${YELLOW}⚠️  Found Elasticsearch, Logstash, or Kibana services still present.${NC}"
-        read -p "$(echo -e "${CYAN}Do you want to clean up old ELK services before continuing? (yes/no): ${NC}")" CONFIRM_CLEANUP
-
-        if [[ "$CONFIRM_CLEANUP" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-            echo -e "${YELLOW}Proceeding with cleanup of old services...${NC}"
-            PREVIOUS_INSTALL=true
-            FRESH_INSTALL=false
-            perform_elk_cleanup
-        else
-            echo -e "${RED}Cleanup skipped. Cannot proceed while old services exist. Exiting.${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}System appears clean. Proceeding with fresh install...${NC}"
-        PREVIOUS_INSTALL=false
-        FRESH_INSTALL=true
-    fi
-
-else
-    echo -e "${RED}Invalid response. Please enter \"yes\" or \"no\".${NC}"
-    exit 1
-fi
-
-# Lowercase & trim just in case
-INSTALL_RESPONSE="$(echo "$INSTALL_RESPONSE" | tr '[:upper:]' '[:lower:]' | xargs)"
-
 # Add appropriate row to final output table
 if [[ "$INSTALL_RESPONSE" == "yes" ]]; then
   add_to_summary_table "Services Cleaned/Reinstalled" "Yes"
@@ -301,31 +325,186 @@ while true; do
     esac
 done
 
-# === Common IP Prompt and Assignment ===
-echo -e "\n${GREEN}Elasticsearch, Logstash, and Kibana will be hosted using the IP you enter below.${NC}"
+# === Common IP Prompt and Assignment (with 1/2 menu + persistent config if missing) ===
+echo -e "\n${GREEN}Elasticsearch, Logstash, and Kibana will be hosted using the IP you choose below.${NC}"
 
 echo -e "${GREEN}--- Network Interfaces ---${NC}"
-ip -br a | awk '{print $1, $2, $3}' | while read iface state addr; do
-    echo -e "${CYAN}$iface${NC} - $state - IP: ${YELLOW}$addr${NC}"
+# Show interface, state, primary IPv4 (if any)
+ip -br a | awk '{print $1, $2, $3}' | while read -r iface state addr; do
+  echo -e "${CYAN}${iface}${NC} - ${state} - IP: ${YELLOW}${addr}${NC}"
 done
 
-# Identify default management interface and IP
-MGMT_IFACE=$(ip -br a | awk '$1 != "lo" && $3 ~ /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1; exit}')
-MGMT_IP=$(ip -4 -o addr show dev "$MGMT_IFACE" | awk '{print $4}' | cut -d/ -f1)
+# Identify default management interface + IP (first non-lo with IPv4)
+MGMT_IFACE="$(ip -br a | awk '$1 != "lo" && $3 ~ /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1; exit}')"
+if [[ -n "${MGMT_IFACE:-}" ]]; then
+  MGMT_IP="$(ip -4 -o addr show dev "$MGMT_IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+else
+  MGMT_IP=""
+fi
 
-echo -e "${GREEN}Use the following IP for accessing this node (management interface):${NC}"
-echo -e "${CYAN}$MGMT_IFACE${NC} - ${YELLOW}$MGMT_IP${NC}"
+# If we found an interface but it has no IPv4, clear MGMT_IFACE so we handle it uniformly
+if [[ -n "${MGMT_IFACE:-}" && -z "${MGMT_IP:-}" ]]; then
+  MGMT_IFACE_NOIP="$MGMT_IFACE"
+  MGMT_IFACE=""
+fi
 
-# Prompt for IP and validate until correct
-while true; do
-    read -p "$(echo -e "${YELLOW}Enter the IP address to use for Elasticsearch, Logstash, and Kibana: ${NC}")" COMMON_IP
-    if validate_ip "$COMMON_IP"; then
-        echo -e "${GREEN}✔ Accepted IP: $COMMON_IP${NC}"
+if [[ -n "${MGMT_IFACE:-}" && -n "${MGMT_IP:-}" ]]; then
+  echo -e "${GREEN}Detected management interface and IP:${NC}"
+  echo -e "  ${CYAN}${MGMT_IFACE}${NC} - ${YELLOW}${MGMT_IP}${NC}"
+  echo -e "  ${YELLOW}1${NC}) ${GREEN}Use detected IP (${MGMT_IP})${NC}"
+  echo -e "  ${YELLOW}2${NC}) ${GREEN}Enter a different IP${NC}"
+  read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" IP_CHOICE
+  IP_CHOICE="${IP_CHOICE:-1}"
+
+  case "$IP_CHOICE" in
+    1)
+      COMMON_IP="$MGMT_IP"
+      echo -e "${GREEN}✔ Accepted IP: ${COMMON_IP}${NC}"
+      ;;
+    2)
+      # Prompt until valid IP entered
+      while true; do
+        read -rp "$(echo -e "${YELLOW}Enter the IPv4 address to use for Elasticsearch, Logstash, and Kibana: ${NC}")" COMMON_IP
+        if validate_ip "$COMMON_IP"; then
+          echo -e "${GREEN}✔ Accepted IP: ${COMMON_IP}${NC}"
+          break
+        else
+          echo -e "${RED}❌ Invalid IP format. Please enter a valid IPv4 address.${NC}"
+        fi
+      done
+      ;;
+    *)
+      echo -e "${YELLOW}⚠ Invalid input, defaulting to detected IP.${NC}"
+      COMMON_IP="$MGMT_IP"
+      ;;
+  esac
+
+else
+  # No usable IP detected — help the user assign a persistent static IP
+  echo -e "${YELLOW}No IPv4 address detected on a non-loopback interface.${NC}"
+  echo -e "${CYAN}Let's configure a persistent static IP using netplan.${NC}"
+
+  # Build a selectable list of non-lo interfaces
+  mapfile -t IFACES < <(ip -br link | awk '$1 != "lo" {print $1}')
+  if [[ ${#IFACES[@]} -eq 0 ]]; then
+    echo -e "${RED}No network interfaces found (besides loopback). Cannot continue.${NC}"
+    exit 1
+  fi
+
+  echo -e "${GREEN}Select the interface to configure:${NC}"
+  idx=1
+  for i in "${IFACES[@]}"; do
+    echo -e "  ${YELLOW}${idx}${NC}) ${CYAN}${i}${NC}"
+    ((idx++))
+  done
+  read -rp "$(echo -e "${GREEN}Choose [${YELLOW}1${GREEN}..${YELLOW}${#IFACES[@]}${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" IFACE_CHOICE
+  IFACE_CHOICE="${IFACE_CHOICE:-1}"
+  if ! [[ "$IFACE_CHOICE" =~ ^[0-9]+$ ]] || (( IFACE_CHOICE < 1 || IFACE_CHOICE > ${#IFACES[@]} )); then
+    echo -e "${YELLOW}⚠ Invalid choice, defaulting to 1.${NC}"
+    IFACE_CHOICE=1
+  fi
+  SEL_IFACE="${IFACES[$((IFACE_CHOICE-1))]}"
+
+  # Collect addressing details
+  while true; do
+    read -rp "$(echo -e "${YELLOW}Enter static IPv4 in CIDR (e.g., 192.168.1.50/24): ${NC}")" STATIC_CIDR
+    # basic CIDR check (nnn.nnn.nnn.nnn/nn)
+    if [[ "$STATIC_CIDR" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]]; then
+      IP_ONLY="${STATIC_CIDR%/*}"
+      if validate_ip "$IP_ONLY"; then
         break
-    else
-        echo -e "${RED}❌ Invalid IP format. Please enter a valid IPv4 address.${NC}"
+      fi
     fi
-done
+    echo -e "${RED}❌ Invalid CIDR. Try again.${NC}"
+  done
+
+  while true; do
+    read -rp "$(echo -e "${YELLOW}Enter default gateway (e.g., 192.168.1.1): ${NC}")" GW
+    if validate_ip "$GW"; then break; fi
+    echo -e "${RED}❌ Invalid gateway IP. Try again.${NC}"
+  done
+
+  # Allow comma-separated DNS
+  while true; do
+    read -rp "$(echo -e "${YELLOW}Enter DNS servers (comma-separated, e.g., 1.1.1.1,8.8.8.8): ${NC}")" DNS_CSV
+    ok=true
+    IFS=',' read -r -a DNS_ARR <<< "$DNS_CSV"
+    for d in "${DNS_ARR[@]}"; do
+      d_trim="$(echo "$d" | xargs)"
+      if ! validate_ip "$d_trim"; then ok=false; break; fi
+    done
+    if $ok; then break; fi
+    echo -e "${RED}❌ One or more DNS entries are invalid. Try again.${NC}"
+  done
+
+  echo -e "  ${YELLOW}1${NC}) ${GREEN}Apply netplan now (write persistent config)${NC}"
+  echo -e "  ${YELLOW}2${NC}) ${GREEN}Cancel (do not change networking)${NC}"
+  read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" APPLY_CHOICE
+  APPLY_CHOICE="${APPLY_CHOICE:-1}"
+
+  case "$APPLY_CHOICE" in
+    2)
+      echo -e "${YELLOW}Networking changes canceled by user. Exiting.${NC}"
+      exit 1
+      ;;
+    1|*)
+      # Write persistent netplan configuration
+      NETPLAN_FILE="/etc/netplan/90-elk-static.yaml"
+      TS="$(date +%Y%m%d%H%M%S)"
+      if [[ -f "$NETPLAN_FILE" ]]; then
+        sudo cp -a "$NETPLAN_FILE" "${NETPLAN_FILE}.bak.${TS}"
+      fi
+
+      # Determine renderer (use NetworkManager if active, otherwise networkd)
+      RENDERER="networkd"
+      if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        RENDERER="NetworkManager"
+      fi
+
+      # Create YAML
+      sudo bash -c "cat > '$NETPLAN_FILE' <<'YAML'
+# Generated by ELK orchestrator - persistent static IP for selected interface
+network:
+  version: 2
+  renderer: ${RENDERER}
+  ethernets:
+    ${SEL_IFACE}:
+      dhcp4: false
+      addresses: [${STATIC_CIDR}]
+      routes:
+        - to: default
+          via: ${GW}
+      nameservers:
+        addresses: [$(echo "$DNS_CSV" | sed 's/ //g')]
+YAML"
+
+      echo -e "${CYAN}Applying netplan...${NC}"
+      if sudo netplan apply 2>/tmp/netplan_err.log; then
+        echo -e "${GREEN}✔ Netplan applied successfully.${NC}"
+      else
+        echo -e "${RED}❌ Netplan apply failed. See /tmp/netplan_err.log${NC}"
+        exit 1
+      fi
+
+      # Set COMMON_IP from configured CIDR
+      COMMON_IP="${STATIC_CIDR%/*}"
+      echo -e "${GREEN}✔ Assigned and persisted IP: ${COMMON_IP} on ${SEL_IFACE}${NC}"
+      ;;
+  esac
+fi
+
+# Final validation/fallback: if COMMON_IP not set, prompt manual (should rarely happen)
+if [[ -z "${COMMON_IP:-}" ]]; then
+  while true; do
+    read -rp "$(echo -e "${YELLOW}Enter the IPv4 address to use for Elasticsearch, Logstash, and Kibana: ${NC}")" COMMON_IP
+    if validate_ip "$COMMON_IP"; then
+      echo -e "${GREEN}✔ Accepted IP: ${COMMON_IP}${NC}"
+      break
+    else
+      echo -e "${RED}❌ Invalid IP format. Please enter a valid IPv4 address.${NC}"
+    fi
+  done
+fi
 
 # Assign to services
 ELASTIC_HOST=$COMMON_IP
@@ -335,75 +514,99 @@ LOGSTASH_HOST=$COMMON_IP
 # Add to summary table
 add_to_summary_table "Management IP" "$COMMON_IP"
 
-# Ask if this is an airgapped environment
+# === Airgap Environment Check (1/2 style) ===
 echo -e "\n${GREEN}Is this machine in an airgapped (offline) environment?${NC}"
-prompt_input "$(echo -e "${GREEN}Type ${YELLOW}\"yes\"${GREEN} to skip internet check, or ${YELLOW}\"no\"${GREEN} to verify connectivity: ${NC}")" IS_airgapped
+echo -e "  ${YELLOW}1${NC}) ${GREEN}Yes — skip internet connectivity check${NC}"
+echo -e "  ${YELLOW}2${NC}) ${GREEN}No  — verify internet connectivity${NC}"
 
-if [[ "$IS_airgapped" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-	echo -e "${YELLOW}airgapped mode confirmed. Skipping internet connectivity check.${NC}"
-else
-	# --- Check internet connectivity ---
-	echo -e "\n${GREEN}Checking internet connectivity...${NC}"
-	PING_TARGET="google.com"
-	PING_COUNT=2
+read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" AIRGAP_CHOICE
+AIRGAP_CHOICE="${AIRGAP_CHOICE:-1}"
 
-	if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
-		echo -e "${GREEN}Internet connectivity confirmed via ping to ${YELLOW}$PING_TARGET.${NC}"
-	else
-		echo -e "${RED}Unable to reach $PING_TARGET. Please verify that this host has internet access.${NC}"
-		read -p "$(echo -e "${YELLOW}Do you want to retry the connectivity check? (yes/no): ${NC}")" RETRY_NET
+case "$AIRGAP_CHOICE" in
+  1)
+    echo -e "${YELLOW}Airgapped mode confirmed. Skipping internet connectivity check.${NC}"
+    IS_airgapped="yes"
+    ;;
+  2)
+    echo -e "\n${GREEN}Checking internet connectivity...${NC}"
+    PING_TARGET="google.com"
+    PING_COUNT=2
 
-		if [[ "$RETRY_NET" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-			echo -e "${YELLOW}Retrying ping...${NC}"
-			if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
-				echo -e "${GREEN}Internet connectivity confirmed on retry.${NC}"
-			else
-				echo -e "${RED}Still no internet. Exiting setup.${NC}"
-				exit 1
-			fi
-		else
-			echo -e "${RED}User opted not to retry. Exiting setup.${NC}"
-			exit 1
-		fi
-	fi
-fi
+    if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
+      echo -e "${GREEN}Internet connectivity confirmed via ping to ${YELLOW}$PING_TARGET.${NC}"
+      IS_airgapped="no"
+    else
+      echo -e "${RED}Unable to reach $PING_TARGET.${NC}"
 
-# Normalize the input
-IS_airgapped="$(echo "$IS_airgapped" | tr '[:upper:]' '[:lower:]' | xargs)"
+      echo -e "  ${YELLOW}1${NC}) ${GREEN}Retry connectivity check${NC}"
+      echo -e "  ${YELLOW}2${NC}) ${GREEN}Exit setup${NC}"
+      read -rp "$(echo -e "${GREEN}Select an option [${YELLOW}1${GREEN}/${YELLOW}2${GREEN}] (default: ${YELLOW}1${GREEN}): ${NC}")" RETRY_CHOICE
+      RETRY_CHOICE="${RETRY_CHOICE:-1}"
 
-# Validate and add to summary table
+      case "$RETRY_CHOICE" in
+        1)
+          echo -e "${YELLOW}Retrying ping...${NC}"
+          if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
+            echo -e "${GREEN}Internet connectivity confirmed on retry.${NC}"
+            IS_airgapped="no"
+          else
+            echo -e "${RED}Still no internet. Exiting setup.${NC}"
+            exit 1
+          fi
+          ;;
+        2)
+          echo -e "${RED}User opted not to retry. Exiting setup.${NC}"
+          exit 1
+          ;;
+        *)
+          echo -e "${YELLOW}⚠ Invalid input, defaulting to retry.${NC}"
+          if ping -c "$PING_COUNT" "$PING_TARGET" > /dev/null 2>&1; then
+            echo -e "${GREEN}Internet connectivity confirmed on retry.${NC}"
+            IS_airgapped="no"
+          else
+            echo -e "${RED}Still no internet. Exiting setup.${NC}"
+            exit 1
+          fi
+          ;;
+      esac
+    fi
+    ;;
+  *)
+    echo -e "${YELLOW}⚠ Invalid input, defaulting to Airgapped (Yes).${NC}"
+    IS_airgapped="yes"
+    ;;
+esac
+
+# Add to summary table
 if [[ "$IS_airgapped" == "yes" ]]; then
   echo -e "${GREEN}✔ Airgap check skipped.${NC}"
-  add_to_summary_table "airgapped Environment" "Yes"
-elif [[ "$IS_airgapped" == "no" ]]; then
-  echo -e "${GREEN}✔ Internet connectivity will be verified.${NC}"
-  add_to_summary_table "airgapped Environment" "No"
+  add_to_summary_table "Airgapped Environment" "Yes"
 else
-  echo -e "${RED}❌ Invalid input. Please type 'yes' or 'no'.${NC}"
-  exit 1
+  echo -e "${GREEN}✔ Internet connectivity verified.${NC}"
+  add_to_summary_table "Airgapped Environment" "No"
 fi
 
 if [[ "$DEPLOYMENT_TYPE" == "Cluster" ]]; then
-    while true; do
-        read -p "$(echo -e "${GREEN}How many additional Elasticsearch nodes will be added to this node for clustering? ${YELLOW}(enter a number)${GREEN}: ${NC}")" NODE_INPUT
-        if [[ "$NODE_INPUT" =~ ^[1-9][0-9]*$ ]]; then
-            NODE_COUNT=$NODE_INPUT
-            echo -e "${GREEN}✔ Cluster will include ${YELLOW}$NODE_COUNT${GREEN} additional node(s).${NC}"
-            add_to_summary_table "Additional Nodes" "$NODE_COUNT"
-            break
-        else
-            echo -e "${RED}❌ Invalid input. Please enter a positive integer greater than 0.${NC}"
-        fi
-    done
+  echo -e "\n${GREEN}Cluster configuration selected.${NC}"
+  echo -e "${CYAN}This node will be the first Elasticsearch node in the cluster.${NC}"
+  echo -e "${GREEN}How many ${YELLOW}additional${GREEN} Elasticsearch nodes (besides this one) will be added to the cluster?${NC}"
+
+  while true; do
+    read -rp "$(echo -e "${GREEN}Enter a number (must be ≥ 1): ${NC}")" NODE_INPUT
+    if [[ "$NODE_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+      ADDITIONAL_NODES=$NODE_INPUT
+      TOTAL_NODES=$((ADDITIONAL_NODES + 1))
+      echo -e "${GREEN}✔ Cluster will include ${YELLOW}${TOTAL_NODES}${GREEN} node(s) total (${YELLOW}${ADDITIONAL_NODES}${GREEN} additional).${NC}"
+      add_to_summary_table "Additional Nodes" "$ADDITIONAL_NODES"
+      add_to_summary_table "Total Cluster Size" "$TOTAL_NODES"
+      break
+    else
+      echo -e "${RED}❌ Invalid input. Must be an integer greater than or equal to 1.${NC}"
+    fi
+  done
+
+  NODE_COUNT=$TOTAL_NODES
 fi
-
-# Assign to final variable
-NODE_COUNT=$NODE_INPUT
-
-echo -e "${GREEN}Cluster will include $NODE_COUNT additional node(s).${NC}"
-
-# Add 1 to include the current node
-NODE_COUNT=$((NODE_INPUT + 1))
 
 # Optional: Display the collected IPs
 echo -e "${GREEN}Elasticsearch host: ${YELLOW}$ELASTIC_HOST${NC}"

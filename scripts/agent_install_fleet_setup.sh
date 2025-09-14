@@ -194,7 +194,7 @@ windows_policy_EDR_info=$(curl --user "${USERNAME}:${PASSWORD}" --request POST \
     "package": {
       "name": "endpoint",
       "title": "Elastic Defend",
-      "version": "'"${ELASTIC_VERSION}"'"
+      "version": "9.1.0"
     }
   }' --insecure)
 
