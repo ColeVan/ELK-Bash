@@ -7,32 +7,85 @@ PACKAGES_DIR="$SCRIPT_DIR/packages"
 mkdir -p "$PACKAGES_DIR"
 
 # --- Main Logic ---
+# expects: AIRGAP_INSTALL, PACKAGES_DIR, ELASTIC_VERSION
+# helpers expected: download_agent <version>, extract_version_from_filename <filename>
 
 if [[ "$AIRGAP_INSTALL" == "true" ]]; then
-    echo -e "${YELLOW}📦 Airgapped mode enabled. Searching for Elastic Agent tarball in: ${PACKAGES_DIR}${NC}"
+  echo -e "${YELLOW}📦 Airgapped mode enabled. Searching for Elastic Agent tarball in: ${PACKAGES_DIR}${NC}"
 
-    FOUND_TAR=$(find "$PACKAGES_DIR" -maxdepth 1 -name "elastic-agent-*-linux-x86_64.tar.gz" | head -n 1)
+  # 1) Exact match to ELASTIC_VERSION (preferred)
+  FOUND_TAR=$(find "$PACKAGES_DIR" -maxdepth 1 -type f -name "elastic-agent-${ELASTIC_VERSION}-linux-x86_64.tar.gz" | head -n 1)
 
-    if [[ ! -f "$FOUND_TAR" ]]; then
-        echo -e "${RED}❌ Elastic Agent tarball not found.${NC}"
-        read -rp "$(echo -e "${YELLOW}Download tarball via curl now? [y/N]: ${NC}")" download_choice
+  if [[ -f "$FOUND_TAR" ]]; then
+    AGENT_FILENAME="$(basename "$FOUND_TAR")"
+    AGENT_VERSION="$ELASTIC_VERSION"
+    echo -e "${GREEN}✔ Found matching tarball: ${AGENT_FILENAME}${NC}"
+  else
+    echo -e "${RED}❌ No tarball found for version ${ELASTIC_VERSION}.${NC}"
 
-        if [[ "$download_choice" =~ ^[Yy]$ ]]; then
-            read -rp "$(echo -e "${YELLOW}Enter Elastic Agent version (e.g., 9.1.0): ${NC}")" AGENT_VERSION
-            download_agent "$AGENT_VERSION"
-        else
-            echo -e "${RED}❌ Cannot continue without tarball. Exiting.${NC}"
-            exit 1
-        fi
+    # 2) List all available tarballs in the directory (if any)
+    mapfile -t _all_paths < <(find "$PACKAGES_DIR" -maxdepth 1 -type f -name "elastic-agent-*-linux-x86_64.tar.gz" 2>/dev/null | sort)
+
+    if (( ${#_all_paths[@]} == 0 )); then
+      echo -e "${YELLOW}ℹ No Elastic Agent tarballs found in ${PACKAGES_DIR}.${NC}"
+      read -rp "$(echo -e "${YELLOW}Download ${ELASTIC_VERSION} now? [y/N]: ${NC}")" _dl_choice
+      if [[ "$_dl_choice" =~ ^[Yy]$ ]]; then
+        download_agent "$ELASTIC_VERSION"
+        AGENT_VERSION="$ELASTIC_VERSION"
+      else
+        echo -e "${RED}❌ Cannot continue without a tarball. Exiting.${NC}"
+        exit 1
+      fi
     else
-        AGENT_FILENAME=$(basename "$FOUND_TAR")
-        AGENT_VERSION=$(extract_version_from_filename "$AGENT_FILENAME")
-        echo -e "${GREEN}✔ Found existing tarball: $AGENT_FILENAME${NC}"
+      echo -e "${YELLOW}🗂 Found the following tarballs:${NC}"
+      _files=() _vers=()
+      for p in "${_all_paths[@]}"; do
+        f="$(basename "$p")"
+        v="$(extract_version_from_filename "$f")"
+        _files+=("$f")
+        _vers+=("$v")
+      done
+
+      # Show numbered menu
+      for i in "${!_files[@]}"; do
+        printf "  [%d] %s (version: %s)\n" "$((i+1))" "${_files[$i]}" "${_vers[$i]}"
+      done
+
+      # Ask if they want to pick one of these
+      read -rp "$(echo -e "${YELLOW}Use one of the versions found above? [y/N]: ${NC}")" _use_found
+      if [[ "$_use_found" =~ ^[Yy]$ ]]; then
+        while :; do
+          read -rp "$(echo -e "${YELLOW}Enter selection [1-${#_files[@]}]: ${NC}")" _idx
+          if [[ "$_idx" =~ ^[0-9]+$ ]] && (( _idx>=1 && _idx<=${#_files[@]} )); then
+            sel=$((_idx-1))
+            AGENT_FILENAME="${_files[$sel]}"
+            AGENT_VERSION="${_vers[$sel]}"
+            FOUND_TAR="${PACKAGES_DIR}/${AGENT_FILENAME}"
+            echo -e "${GREEN}✔ Selected: ${AGENT_FILENAME} (version ${AGENT_VERSION})${NC}"
+            break
+          else
+            echo -e "${RED}Invalid selection. Try again.${NC}"
+          fi
+        done
+      else
+        # 3) Declined using a found tarball; offer to download target ELASTIC_VERSION
+        read -rp "$(echo -e "${YELLOW}Download ${ELASTIC_VERSION} now? [y/N]: ${NC}")" _dl_choice2
+        if [[ "$_dl_choice2" =~ ^[Yy]$ ]]; then
+          download_agent "$ELASTIC_VERSION"
+          AGENT_VERSION="$ELASTIC_VERSION"
+        else
+          echo -e "${RED}❌ Cannot continue without a tarball. Exiting.${NC}"
+          exit 1
+        fi
+      fi
     fi
+  fi
+
 else
-    echo -e "${GREEN}🌐 Online installation: Downloading Elastic Agent...${NC}"
-    read -rp "$(echo -e "${YELLOW}Enter Elastic Agent version (e.g., 9.1.0): ${NC}")" AGENT_VERSION
-    download_agent "$AGENT_VERSION"
+  echo -e "${GREEN}🌐 Online installation: Downloading Elastic Agent...${NC}"
+  read -rp "$(echo -e "${YELLOW}Enter Elastic Agent version (default: ${ELASTIC_VERSION}): ${NC}")" AGENT_VERSION
+  AGENT_VERSION="${AGENT_VERSION:-$ELASTIC_VERSION}"
+  download_agent "$AGENT_VERSION"
 fi
 
 # --- 1. Extraction ---

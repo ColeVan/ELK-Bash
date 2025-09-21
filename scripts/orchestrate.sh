@@ -17,7 +17,8 @@ fi
 : "${CYAN:=$'\e[36m'}";  : "${NC:=$'\e[0m'}"
 : "${BOLD:=$'\e[1m'}";   : "${DIM:=$'\e[2m'}"
 
-trap 'echo -e "\n${YELLOW}⚠️  Operation interrupted by user. Returning to main menu...${NC}"; sleep 1' SIGINT
+FORCE_EXIT_ON_INT="${FORCE_EXIT_ON_INT:-false}"
+trap 'echo -e "\n${YELLOW}⚠️  Operation interrupted by user.${NC}"; if bool_true "$FORCE_EXIT_ON_INT"; then exit 130; else echo -e "${YELLOW}Returning to main menu...${NC}"; sleep 1; fi' SIGINT
 
 # ----------------------------
 # Minimal fallbacks for common helpers (only if missing)
@@ -194,8 +195,6 @@ render_remote_details() {
     done
   fi
 }
-# ----------------------------
-# ----------------------------
 
 # ----------------------------
 # Remote probing (SSH)
@@ -286,9 +285,8 @@ refresh_remote_status() {
 
   echo -e "${GREEN}✔ Remote status refreshed. Returning to menu...${NC}"
   sleep 1
+  pause_and_return_to_menu
 }
-# ----------------------------
-# ----------------------------
 
 # ----------------------------
 # Full send
@@ -296,7 +294,10 @@ refresh_remote_status() {
 run_full_setup() {
   clear
   echo -e "${CYAN}Starting full setup...${NC}"
+
+  # Expand variables at signal time; works fine with single-quoted trap string.
   trap 'echo -e "\n${YELLOW}⚠️  Setup interrupted. Returning to main menu...${NC}"; return 130' SIGINT
+
   load_env
 
   # Resume/fresh prompt if we see prior state
@@ -304,14 +305,23 @@ run_full_setup() {
     ELK_ENV_MTIME="$(date -r "$ELK_ENV_FILE" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo 'unknown')"
     echo -e "${YELLOW}Detected previous deployment state at:${NC} ${CYAN}${ELK_ENV_FILE}${NC}"
     echo -e "${YELLOW}Last updated:${NC} ${CYAN}${ELK_ENV_MTIME}${NC}"
+    echo -e "${CYAN}Options:${NC}"
+    echo -e "  ${GREEN}yes${NC}  → Remove saved state and perform a ${YELLOW}fresh install${NC}"
+    echo -e "  ${GREEN}no${NC}   → Keep saved state and ${YELLOW}resume from where you left off${NC}"
     echo
-    local RESET_ENV=""
+    echo -e "${YELLOW}Default:${NC} ${GREEN}yes (fresh install)${NC}"
+    echo
+
     if type prompt_input >/dev/null 2>&1; then
-      prompt_input "$(echo -e "${GREEN}Delete saved state and start fresh? Type ${YELLOW}yes${GREEN} to delete or ${YELLOW}no${GREEN} to resume: ${NC}")" RESET_ENV
+      prompt_input "$(echo -e "${GREEN}Delete saved state and start fresh? (${YELLOW}yes${GREEN}=fresh, ${YELLOW}no${GREEN}=resume) [default: ${YELLOW}yes${GREEN}]: ${NC}")" RESET_ENV
     else
-      read -r -p "$(echo -e "${GREEN}Delete saved state and start fresh? Type ${YELLOW}yes${GREEN} to delete or ${YELLOW}no${GREEN} to resume: ${NC}")" RESET_ENV
+      read -r -p "$(echo -e "${GREEN}Delete saved state and start fresh? (${YELLOW}yes${GREEN}=fresh, ${YELLOW}no${GREEN}=resume) [default: ${YELLOW}yes${GREEN}]: ${NC}")" RESET_ENV
     fi
-    if bool_true "${RESET_ENV:-}"; then
+
+    # Default to "yes" if user pressed Enter
+    RESET_ENV="${RESET_ENV:-yes}"
+
+    if bool_true "$RESET_ENV"; then
       local TS; TS="$(date '+%Y%m%d-%H%M%S')"
       cp -a -- "$ELK_ENV_FILE" "${ELK_ENV_FILE}.${TS}.bak" 2>/dev/null || true
       rm -f -- "$ELK_ENV_FILE" 2>/dev/null || true
@@ -321,10 +331,10 @@ run_full_setup() {
                 OFFLINE_MODE SHOW_TMUX REMOTE_ES_NODES NSM_REMOTE_NODES; do
         unset "${_k}" 2>/dev/null || true
       done
-      echo -e "${GREEN}✔ Previous state removed. Starting fresh.${NC}"
+      echo -e "${GREEN}✔ Previous state removed. Starting fresh deployment.${NC}"
       load_env
     else
-      echo -e "${GREEN}✔ Resuming from saved state.${NC}"
+      echo -e "${GREEN}✔ Resuming from saved state — previously completed steps will be skipped.${NC}"
     fi
   fi
 
@@ -365,15 +375,27 @@ run_full_setup() {
 
     # STEP 3-4: Airgapped / EPR
     if [[ -z "${AIRGAPPED_MODE:-}" ]]; then
-      echo -e "\n${YELLOW}Will this be moved to an airgapped env after setup?${NC}"
-      local OFFLINE_MODE=""
-      if type prompt_input >/dev/null 2>&1; then
-        prompt_input "$(echo -e "${GREEN}Type ${GREEN}'yes'${YELLOW} for airgapped registry or ${RED}'no'${YELLOW} to continue: ${NC}")" OFFLINE_MODE
-      else
-        read -r -p "$(echo -e "${GREEN}Type ${GREEN}'yes'${YELLOW} for airgapped registry or ${RED}'no'${YELLOW}: ${NC}")" OFFLINE_MODE
-      fi
-      if bool_true "${OFFLINE_MODE:-}"; then
-        echo -e "${GREEN}Airgapped selected.${NC}"
+      echo -e "\n${YELLOW}Will this be moved to an airgapped environment after setup?${NC}"
+      echo -e "  ${GREEN}[1] Yes${NC} — set up local Elastic Package Registry (EPR)"
+      echo -e "  ${GREEN}[2] No ${NC} — continue without EPR (default)"
+      OFFLINE_MODE=""
+      local retries=0 max_retries=3
+      while true; do
+        ((retries++))
+        read -rp "$(echo -e "${YELLOW}Select option [1-2, default 2]: ${NC}")" choice
+        [[ -z "$choice" ]] && choice="2"   # default = No
+        case "$choice" in
+          1) OFFLINE_MODE="yes"; break ;;
+          2) OFFLINE_MODE="no";  break ;;
+          *) 
+            echo -e "${YELLOW}Invalid choice. Please enter 1 or 2.${NC}"
+            [[ $retries -ge $max_retries ]] && { echo -e "${RED}Too many invalid attempts. Defaulting to 'no'.${NC}"; OFFLINE_MODE="no"; break; }
+            ;;
+        esac
+      done
+
+      if [[ "$OFFLINE_MODE" == "yes" ]]; then
+        echo -e "${GREEN}Airgapped mode selected.${NC}"
         type log_step >/dev/null 2>&1 && log_step "AIRGAPPED_MODE" "true" || true
         persist_bool "AIRGAPPED_MODE" "true"
         echo -e "${CYAN}📦 Setting up Elastic Package Registry...${NC}"
@@ -386,6 +408,7 @@ run_full_setup() {
         persist_bool "AIRGAPPED_MODE" "false"
         echo -e "${GREEN}Continuing without local EPR...${NC}"
       fi
+
     else
       if bool_true "${AIRGAPPED_MODE}"; then
         echo -e "${CYAN}📦 Airgapped mode previously selected. Ensuring EPR is configured...${NC}"
@@ -487,16 +510,6 @@ safe_pretty_os() {
   echo "${name:-Linux}"
 }
 
-render_remote_counters() {
-  # Guarded to never exit under -e
-  load_env 2>/dev/null || true
-  local es_count=0 nsm_count=0
-  for _ in ${REMOTE_ES_NODES:-};  do ((es_count++));  done
-  for _ in ${NSM_REMOTE_NODES:-}; do ((nsm_count++)); done
-  printf " %bRemote%b:  ES nodes %s  •  NSM nodes %s\n" "$BOLD" "$NC" "$es_count" "$nsm_count" || true
-}
-
-
 # ----------------------------
 # Menu icons
 # ----------------------------
@@ -555,19 +568,17 @@ _execute_action_by_id() {
     3) clear; source "$SCRIPT_DIR/service_install_setup.sh"; type log_step >/dev/null 2>&1 && log_step "SERVICE_INSTALL" "true" || true; persist_bool "SERVICE_INSTALL" "true"; pause_and_return_to_menu ;;
     4) if require_service_installed; then clear; source "$SCRIPT_DIR/agent_install_fleet_setup.sh"; type log_step >/dev/null 2>&1 && log_step "AGENT_FLEET_SETUP" "true" || true; persist_bool "AGENT_FLEET_SETUP" "true"; fi; pause_and_return_to_menu ;;
     5) if require_service_installed; then clear; source "$SCRIPT_DIR/Elastic_EPR_install.sh"; type log_step >/dev/null 2>&1 && log_step "EPR_CONFIGURED" "true" || true; persist_bool "EPR_CONFIGURED" "true"; fi; pause_and_return_to_menu ;;
-    6) type run_elk_cleanup >/dev/null 2>&1 && run_elk_cleanup || echo -e "${YELLOW}cleanup function not found${NC}";;
-    7) type run_firewall_hardening >/dev/null 2>&1 && run_firewall_hardening || echo -e "${YELLOW}firewall function not found${NC}";;
+    6) type run_elk_cleanup >/dev/null 2>&1 && run_elk_cleanup || echo -e "${YELLOW}cleanup function not found${NC}"; pause_and_return_to_menu ;;
+    7) type run_firewall_hardening >/dev/null 2>&1 && run_firewall_hardening || echo -e "${YELLOW}firewall function not found${NC}"; pause_and_return_to_menu ;;
     8) type view_env_file >/dev/null 2>&1 && view_env_file || { echo -e "${CYAN}--- .elk_env ---${NC}"; cat "$ELK_ENV_FILE"; echo; pause_and_return_to_menu; };;
     9) clear; local REMOTE_ES_HOST=""; read -r -p "$(echo -e "${GREEN}Enter remote Elasticsearch host/IP to record (optional): ${NC}")" REMOTE_ES_HOST; local REMOTE_SCRIPT="$SCRIPT_DIR/run_remote_deploy.sh"; if ORCH_REMOTE_HOST="$REMOTE_ES_HOST" run_script "$REMOTE_SCRIPT"; then [[ -n "$REMOTE_ES_HOST" ]] && { persist_list_add "REMOTE_ES_NODES" "$REMOTE_ES_HOST"; record_host_status "ES" "$REMOTE_ES_HOST" "success"; }; else [[ -n "$REMOTE_ES_HOST" ]] && { persist_list_add "REMOTE_ES_NODES" "$REMOTE_ES_HOST"; record_host_status "ES" "$REMOTE_ES_HOST" "failed"; }; fi; pause_and_return_to_menu ;;
-    10) deploy_es_agents ;;
-	11) type run_zeek_deploy     >/dev/null 2>&1 && run_zeek_deploy     || echo -e "${YELLOW}zeek_deploy function not found${NC}";;
-	12) type run_suricata_deploy >/dev/null 2>&1 && run_suricata_deploy || echo -e "${YELLOW}suricata_deploy function not found${NC}";;
-
-	13) run_remote_nsm_deployment ;;
-	14) run_nsm_enroll_remote ;;
-
-	15) refresh_remote_status ;;
-	16) echo -e "${GREEN}Exiting setup. Goodbye!${NC}"; exit 0 ;;
+    10) deploy_es_agents; pause_and_return_to_menu ;;
+    11) type run_zeek_deploy     >/dev/null 2>&1 && run_zeek_deploy     || echo -e "${YELLOW}zeek_deploy function not found${NC}"; pause_and_return_to_menu ;;
+    12) type run_suricata_deploy >/dev/null 2>&1 && run_suricata_deploy || echo -e "${YELLOW}suricata_deploy function not found${NC}"; pause_and_return_to_menu ;;
+    13) run_remote_nsm_deployment; pause_and_return_to_menu ;;
+    14) run_nsm_enroll_remote; pause_and_return_to_menu ;;
+    15) refresh_remote_status ;;
+    16) echo -e "${GREEN}Exiting setup. Goodbye!${NC}"; exit 0 ;;
     *) : ;;
   esac
 }
@@ -588,7 +599,7 @@ _render_header() {
   echo -e "[${GREEN}Host${NC}: ${HOSTNAME}] [${GREEN}IP${NC}: ${IP}] [${GREEN}OS${NC}: ${OS_NAME}]"
 
   render_service_status_row
-  render_remote_counters || true
+  render_remote_counters
 
   local svc_box="$(_bool_chip SERVICE_INSTALL)"
   local fleet_box="$(_bool_chip AGENT_FLEET_SETUP)"
@@ -615,11 +626,17 @@ _render_header() {
 _build_menu_model() {
   local services_ready
   if service_install_ok; then services_ready=1; else services_ready=0; fi
+  load_env  # Ensure env vars are loaded for dynamic notes
+
+  local foundation_note=""
+  if bool_true "${FOUNDATION_SETUP:-false}"; then
+    foundation_note="${GREEN}(completed via full setup)${NC}"
+  fi
 
   # Items: id|icon|label|note|statevar|locked
   MENU_ITEMS=(
     "1|$ICO_DEPLOY|Deploy Elasticsearch, Logstash, and Kibana \"ELK\" on this node||0"
-    "2|$ICO_SETUP|Run foundational setup||FOUNDATION_SETUP|0"
+    "2|$ICO_SETUP|Run foundational setup|$foundation_note|FOUNDATION_SETUP|0"
     "3|$ICO_SERVICES|Only deploy \"ELK\" services||SERVICE_INSTALL|0"
     "4|$ICO_AGENT|Deploy Elastic Agent in Fleet mode on this node|$( ((services_ready)) || echo "${YELLOW}(requires services to be installed)${NC}")|AGENT_FLEET_SETUP|$(( services_ready ? 0 : 1 ))"
     "5|$ICO_EPR|Install Elastic Package Registry with Docker|$( ((services_ready)) || echo "${YELLOW}(requires services to be installed)${NC}")|EPR_CONFIGURED|$(( services_ready ? 0 : 1 ))"
@@ -628,12 +645,12 @@ _build_menu_model() {
     "8|$ICO_LOGS|View deployment log (.elk_env)|||0"
     "9|$ICO_REMOTE|Deploy Remote Elasticsearch Node|||0"
     "10|$ICO_RAGENT|Deploy Elastic Agent to remote nodes||REMOTE_AGENT_DEPLOYED|0"
-	"11|$ICO_ZEEK|Deploy Zeek (local)|||0"
-	"12|$ICO_SURI|Deploy Suricata (local)|||0"
-	"13|$ICO_NSM|Deploy NSM on a remote node (Zeek & Suricata)|||0"
-	"14|$ICO_RAGENT|Enroll remote NSM sensor nodes||NSM_REMOTE_DEPLOYED|0"
-	"15|$ICO_REFRESH|Refresh remote status (SSH probe ES/Zeek/Suricata)|||0"
-	"16|$ICO_EXIT|Exit|||0"
+    "11|$ICO_ZEEK|Deploy Zeek (local)|||0"
+    "12|$ICO_SURI|Deploy Suricata (local)|||0"
+    "13|$ICO_NSM|Deploy NSM on a remote node (Zeek & Suricata)|||0"
+    "14|$ICO_RAGENT|Enroll remote NSM sensor nodes||NSM_REMOTE_DEPLOYED|0"
+    "15|$ICO_REFRESH|Refresh remote status (SSH probe ES/Zeek/Suricata)|||0"
+    "16|$ICO_EXIT|Exit|||0"
   )
 }
 
@@ -699,7 +716,6 @@ main_menu() {
                   else
                     _menu_restore_cursor
                     _execute_action_by_id "$id"
-                    _execute_action_by_id "$id"
                     tput civis 2>/dev/null || true
                   fi
                   ;;
@@ -708,7 +724,15 @@ main_menu() {
       *)          : ;;
     esac
   done
+  set -e  # Restore strict mode after menu
 }
 
 # keep main menu running
-while true; do main_menu; done
+while true; do
+  main_menu
+  load_env  # Reload to check flags
+  if bool_true "${DEPLOY_COMPLETE:-false}"; then
+    echo -e "${GREEN}Deployment complete! Exiting.${NC}"
+    exit 0
+  fi
+done

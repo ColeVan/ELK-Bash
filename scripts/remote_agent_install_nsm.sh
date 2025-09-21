@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# nsm_policy_create_and_remote_enroll_scp.sh
+# remote_agent_install_nsm_fixed.sh
+# Purpose: Create/ensure Fleet policy, attach integrations, mint enrollment token,
+#          then SCP an Elastic Agent tarball to each NSM sensor and install it
+#          after performing a safe/clean uninstall if a prior Agent exists.
+#
+# Notes:
+# - Uses OAuth2 password grant against Elasticsearch to get a bearer token for Kibana APIs.
+# - Prompts are streamlined to avoid duplication and to use clear wording.
+# - Remote installer now performs an idempotent uninstall/cleanup prior to install.
+# - Values are persisted to .elk_env for convenience.
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -42,24 +52,32 @@ persist_kv_safe() {
 }
 
 # ------------------------------------------------------
-# Prompts (with fallbacks to any existing env)
+# Prompts (streamlined wording + consistent defaults)
 # ------------------------------------------------------
-read -rp "Enter Elastic host (hostname or IP, no scheme) [${ELASTIC_HOST:-}]: " ELASTIC_HOST_IN
-ELASTIC_HOST="${ELASTIC_HOST_IN:-${ELASTIC_HOST:-}}"
-[[ -n "$ELASTIC_HOST" ]] || { echo -e "${RED}Elastic host is required.${NC}"; exit 1; }
+# 1) NSM targets (ask ONCE, honor .elk_env if set)
+read -rp "NSM sensor host(s) to enroll (comma-separated IPs or DNS) [${NSM_TARGETS:-}]: " HOSTS_CSV_IN
+HOSTS_CSV="${HOSTS_CSV_IN:-${NSM_TARGETS:-}}"
+[[ -n "$HOSTS_CSV" ]] || { echo -e "${RED}At least one NSM host is required.${NC}"; exit 1; }
 
-read -rp "Enter username [${USERNAME:-}]: " USERNAME_IN
+# 2) Stack host (your requested wording)
+read -rp "Enter IP where fleet server, elasticsearch, and kibana are being hosted [${ELASTIC_HOST:-}]: " ELASTIC_HOST_IN
+ELASTIC_HOST="${ELASTIC_HOST_IN:-${ELASTIC_HOST:-}}"
+[[ -n "$ELASTIC_HOST" ]] || { echo -e "${RED}Host/IP is required.${NC}"; exit 1; }
+
+# 3) Auth
+read -rp "Enter Elastic Superuser username [${USERNAME:-}]: " USERNAME_IN
 USERNAME="${USERNAME_IN:-${USERNAME:-}}"
 [[ -n "$USERNAME" ]] || { echo -e "${RED}Username is required.${NC}"; exit 1; }
+read -srp "Enter Elastic Superuser password: " PASSWORD; echo ""
 
-read -srp "Enter password: " PASSWORD
-echo ""
+# 4) Fleet host (no duplicate phrasing)
+_default_fleet="${FLEET_SERVER_HOST:-$ELASTIC_HOST}"
+read -rp "Fleet Server host [default: ${_default_fleet}]: " FLEET_HOST_IN
+FLEET_HOST="${FLEET_HOST_IN:-${_default_fleet}}"
 
-read -rp "Fleet Server host (ENTER to use ${ELASTIC_HOST}) [${FLEET_SERVER_HOST:-}]: " FLEET_HOST_IN
-FLEET_HOST="${FLEET_HOST_IN:-${FLEET_SERVER_HOST:-$ELASTIC_HOST}}"
-
-read -rp "Policy name [${POLICY_NAME:-network monitoring}]: " POLICY_NAME_IN
-POLICY_NAME="${POLICY_NAME_IN:-${POLICY_NAME:-network monitoring}}"
+# 5) Policy bits (env default if present; otherwise sensible defaults)
+read -rp "Policy name [${POLICY_NAME:-nsm}]: " POLICY_NAME_IN
+POLICY_NAME="${POLICY_NAME_IN:-${POLICY_NAME:-nsm}}"
 
 read -rp "Policy description [${POLICY_DESCRIPTION:-Networking Monitoring Policy}]: " POLICY_DESC_IN
 POLICY_DESCRIPTION="${POLICY_DESC_IN:-${POLICY_DESCRIPTION:-Networking Monitoring Policy}}"
@@ -67,20 +85,25 @@ POLICY_DESCRIPTION="${POLICY_DESC_IN:-${POLICY_DESCRIPTION:-Networking Monitorin
 read -rp "Policy namespace [${POLICY_NAMESPACE:-default}]: " POLICY_NS_IN
 POLICY_NAMESPACE="${POLICY_NS_IN:-${POLICY_NAMESPACE:-default}}"
 
+# Default ENTER => N (false), even if HAS_FLEET_SERVER is empty
 read -rp "Should this policy host Fleet Server? (y/N) [${HAS_FLEET_SERVER:-}]: " HAS_FS_IN
-case "${HAS_FS_IN,,}" in y|yes) HAS_FLEET_SERVER=true ;; "") HAS_FLEET_SERVER="${HAS_FLEET_SERVER:-false}" ;; *) HAS_FLEET_SERVER=false ;; esac
+case "${HAS_FS_IN,,}" in
+  y|yes) HAS_FLEET_SERVER=true ;;
+  "")     HAS_FLEET_SERVER=false ;;   # default N on Enter
+  *)      HAS_FLEET_SERVER=false ;;
+esac
 
-read -rp "Integrations to add (comma-separated; empty for none) [${PACKAGES_TO_ADD:-system}]: " PKGS_IN
+# 6) Integrations
+# Show example default "zeek, suricata" if PACKAGES_TO_ADD is not already set via .elk_env
+_integ_default="${PACKAGES_TO_ADD:-zeek, suricata}"
+read -rp "Integrations to add (comma-separated; Enter for example) [${_integ_default}]: " PKGS_IN
 if [[ -z "${PKGS_IN// }" ]]; then
-  PACKAGES_TO_ADD="${PACKAGES_TO_ADD:-system}"
+  PACKAGES_TO_ADD="${_integ_default}"
 else
   PACKAGES_TO_ADD="$PKGS_IN"
 fi
 
-read -rp "NSM host(s) to enroll (comma-separated hostnames/IPs) [${NSM_TARGETS:-}]: " HOSTS_CSV_IN
-HOSTS_CSV="${HOSTS_CSV_IN:-${NSM_TARGETS:-}}"
-[[ -n "$HOSTS_CSV" ]] || { echo -e "${RED}At least one NSM host is required.${NC}"; exit 1; }
-
+# 7) SSH + version
 read -rp "SSH user [${SSH_USER:-root}]: " SSH_USER_IN
 SSH_USER="${SSH_USER_IN:-${SSH_USER:-root}}"
 
@@ -90,7 +113,7 @@ SSH_PORT="${SSH_PORT_IN:-${SSH_PORT:-22}}"
 read -rp "SSH private key path [${SSH_KEY:-$HOME/.ssh/id_ed25519}]: " SSH_KEY_IN
 SSH_KEY="${SSH_KEY_IN:-${SSH_KEY:-$HOME/.ssh/id_ed25519}}"
 
-read -rp "Elastic Agent version to install (e.g., 9.1.3) [${ELASTIC_AGENT_VERSION:-}]: " VERSION_IN
+read -rp "Elastic Agent version to install (e.g., 9.1.4) [${ELASTIC_AGENT_VERSION:-}]: " VERSION_IN
 VERSION="${VERSION_IN:-${ELASTIC_AGENT_VERSION:-}}"
 
 # ------------------------------------------------------
@@ -138,8 +161,8 @@ ACCESS_TOKEN_JSON=$(curl --silent --show-error --fail --insecure \
   --header 'Content-Type: application/json' \
   --data '{
     "grant_type": "password",
-    "username": "'"${USERNAME}"'",
-    "password": "'"${PASSWORD}"'"
+    "username": "'""${USERNAME}""'",
+    "password": "'""${PASSWORD}""'"
   }')
 api_access_token=$(echo "$ACCESS_TOKEN_JSON" | jq -r '.access_token // empty')
 [[ -n "$api_access_token" ]] || { echo -e "${RED}Failed to obtain access token.${NC}"; echo "$ACCESS_TOKEN_JSON"; exit 1; }
@@ -208,6 +231,8 @@ fi
 # ------------------------------------------------------
 # 4) Create enrollment token for the policy
 # ------------------------------------------------------
+console_sep() { echo -e "${CYAN}------------------------------------------------------------${NC}"; }
+
 echo -e "${BLUE}Creating enrollment API key…${NC}"
 enroll_payload=$(jq -nc --arg pid "$fleet_policy_id" '{policy_id: $pid}')
 enroll_resp=$(kb POST "/api/fleet/enrollment_api_keys" --data "$enroll_payload")
@@ -215,10 +240,12 @@ enrollment_key=$(echo "$enroll_resp" | jq -r '.item.api_key // empty')
 enrollment_id=$(echo  "$enroll_resp" | jq -r '.item.id     // empty')
 [[ -n "$enrollment_key" ]] || { echo -e "${RED}Failed to create enrollment API key.${NC}"; echo "$enroll_resp"; exit 1; }
 
+console_sep
 echo -e "${GREEN}Enrollment token created.${NC}"
 echo -e "${YELLOW}Token ID:${NC} $enrollment_id"
 echo -e "${YELLOW}Enrollment Token:${NC} $enrollment_key"
 echo -e "${BLUE}Fleet URL:${NC} $FLEET_URL"
+console_sep
 
 # Persist for continuity
 persist_kv_safe "$ELK_ENV_FILE" "ELASTIC_HOST" "$ELASTIC_HOST"
@@ -231,7 +258,6 @@ persist_kv_safe "$ELK_ENV_FILE" "POLICY_NAMESPACE" "$POLICY_NAMESPACE"
 # ------------------------------------------------------
 # 5) Local tarball selection / download (once), then SCP per host
 # ------------------------------------------------------
-# Detect local arch tarball needs per remote host (we’ll choose per-remote arch)
 echo -e "${BLUE}Preparing Elastic Agent tarballs in ${PACKAGES_DIR}…${NC}"
 
 download_agent_tarball() {
@@ -256,44 +282,96 @@ download_agent_tarball() {
   return 1
 }
 
-[[ -n "$VERSION" ]] || { read -rp "Elastic Agent version to download (e.g., 9.1.3): " VERSION; [[ -n "$VERSION" ]] || { echo -e "${RED}Version required.${NC}"; exit 1; }; }
+[[ -n "$VERSION" ]] || { read -rp "Elastic Agent version to download (e.g., 9.1.4): " VERSION; [[ -n "$VERSION" ]] || { echo -e "${RED}Version required.${NC}"; exit 1; }; }
 
 IFS=',' read -r -a HOSTS <<< "$HOSTS_CSV"
 
 # ------------------------------------------------------
 # 6) For each host: detect arch, pick tarball, SCP, remote install using token
 # ------------------------------------------------------
-remote_installer='
-#!/usr/bin/env bash
+remote_installer='#!/usr/bin/env bash
 set -euo pipefail
+: "${GREEN:=\e[32m}"; : "${YELLOW:=\e[33m}"; : "${RED:=\e[31m}"
+: "${BLUE:=\e[34m}";  : "${CYAN:=\e[36m}";   : "${NC:=\e[0m}"
 RDIR="${1:-/tmp}"
 FLEET_URL="${2:?fleet_url}"
 TOKEN="${3:?token}"
-# Extract
+
+console_sep() { echo -e "${CYAN}------------------------------------------------------------${NC}"; }
+
+console_sep
+echo -e "${CYAN}Checking for existing Elastic Agent and cleaning up (idempotent)…${NC}"
+
+# 1) Stop service if present
+if systemctl list-unit-files | grep -q '^elastic-agent\.service'; then
+  sudo systemctl stop elastic-agent 2>/dev/null || true
+fi
+
+# 2) Attempt vendor uninstall if binary exists
+if command -v elastic-agent >/dev/null 2>&1; then
+  sudo elastic-agent uninstall -f 2>/dev/null || true
+elif [[ -x /opt/Elastic/Agent/elastic-agent ]]; then
+  sudo /opt/Elastic/Agent/elastic-agent uninstall -f 2>/dev/null || true
+fi
+
+# 3) Kill any stray processes
+if pgrep -f elastic-agent >/dev/null; then
+  echo -e "${YELLOW}Killing stray elastic-agent processes…${NC}"
+  sudo pkill -f elastic-agent || true
+fi
+
+# 4) Remove directories
+for d in /opt/Elastic /etc/elastic-agent /var/lib/elastic-agent /var/log/elastic-agent; do
+  if [[ -e "$d" ]]; then
+    echo -e "${YELLOW}Removing $d…${NC}"; sudo rm -rf "$d" || true
+  fi
+done
+
+# 5) Remove service and reload systemd
+if [[ -f /etc/systemd/system/elastic-agent.service ]]; then
+  sudo systemctl disable elastic-agent 2>/dev/null || true
+  sudo rm -f /etc/systemd/system/elastic-agent.service || true
+fi
+sudo systemctl daemon-reexec 2>/dev/null || true
+sudo systemctl daemon-reload 2>/dev/null || true
+
+echo -e "${GREEN}Cleanup complete.${NC}"
+console_sep
+
+# Extract tarball and install
+if [[ ! -s "$RDIR/agent.tgz" ]]; then
+  echo -e "${RED}Agent payload missing: $RDIR/agent.tgz${NC}"; exit 1
+fi
+
 tar xzf "$RDIR/agent.tgz" -C "$RDIR"
 cd "$(ls -1d "$RDIR"/elastic-agent-* | head -n1)"
-# Install
-if [ "$(id -u)" -eq 0 ]; then
-  ./elastic-agent install --non-interactive --url="$FLEET_URL" --enrollment-token="$TOKEN" --insecure
+
+install_cmd=( ./elastic-agent install --non-interactive --url="$FLEET_URL" --enrollment-token="$TOKEN" --insecure )
+
+if [[ "$(id -u)" -eq 0 ]]; then
+  "${install_cmd[@]}"
 elif sudo -n true 2>/dev/null; then
-  sudo -n ./elastic-agent install --non-interactive --url="$FLEET_URL" --enrollment-token="$TOKEN" --insecure
+  sudo -n "${install_cmd[@]}"
 else
   tries=0
   while : ; do
     tries=$((tries+1))
     read -srp "Sudo password for $USER: " sudopw </dev/tty; echo
     if printf "%s\n" "$sudopw" | sudo -S -p "" true 2>/dev/null; then
-      if printf "%s\n" "$sudopw" | sudo -S -p "" ./elastic-agent install --non-interactive --url="$FLEET_URL" --enrollment-token="$TOKEN" --insecure; then
+      if printf "%s\n" "$sudopw" | sudo -S -p "" "${install_cmd[@]}"; then
         unset sudopw; break
       else
         unset sudopw; echo "sudo command failed." >&2; exit 1
       fi
     else
       unset sudopw; echo "Sorry, try again." >&2
-      [ "$tries" -ge 3 ] && { echo "sudo authentication failed"; exit 1; }
+      [[ "$tries" -ge 3 ]] && { echo "sudo authentication failed"; exit 1; }
     fi
   done
 fi
+
+console_sep
+systemctl is-active elastic-agent >/dev/null 2>&1 && echo -e "${GREEN}Elastic Agent is running.${NC}" || echo -e "${YELLOW}Elastic Agent not active (check logs).${NC}"
 '
 
 NSM_ENROLLED_HOSTS="${NSM_ENROLLED_HOSTS:-}"
@@ -315,7 +393,6 @@ for H in "${HOSTS[@]}"; do
 
   # 2) Ensure local tarball exists (download if missing)
   tarball=""
-  # Try exact
   if [[ -n "$VERSION" ]]; then
     for lbl in "$arch_label_primary" "$arch_label_alt"; do
       [[ -z "$lbl" ]] && continue
@@ -323,7 +400,6 @@ for H in "${HOSTS[@]}"; do
       [[ -f "$candidate" ]] && { tarball="$candidate"; break; }
     done
   fi
-  # Try latest downloaded for arch
   if [[ -z "$tarball" ]]; then
     for lbl in "$arch_label_primary" "$arch_label_alt"; do
       [[ -z "$lbl" ]] && continue
@@ -331,7 +407,6 @@ for H in "${HOSTS[@]}"; do
       [[ -n "$found" ]] && { tarball="$found"; break; }
     done
   fi
-  # Download if still missing
   if [[ -z "$tarball" ]]; then
     if pth="$(download_agent_tarball "$VERSION" "$arch_label_primary" "$arch_label_alt")"; then
       tarball="$pth"
@@ -368,6 +443,7 @@ for H in "${HOSTS[@]}"; do
     *) NSM_ENROLLED_HOSTS="${NSM_ENROLLED_HOSTS:+${NSM_ENROLLED_HOSTS},}$host" ;;
   esac
   persist_kv_safe "$ELK_ENV_FILE" "NSM_ENROLLED_HOSTS" "$NSM_ENROLLED_HOSTS"
+
 done
 
 # Also persist convenience keys

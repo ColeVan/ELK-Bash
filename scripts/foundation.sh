@@ -623,35 +623,38 @@ while true; do
 done
 
 # Prompt for superuser username with validation and confirmation
-while true; do
-  prompt_input "Enter the superuser username for Kibana webUI access and Elasticsearch interactions: " USERNAME
-
+#while true; do
+#  prompt_input "Enter the superuser username for  Elasticsearch interactions: " USERNAME
+#
   # ✅ Only allow alphanumeric and underscores, no @ signs or emails
-  if [[ "$USERNAME" =~ ^[a-zA-Z0-9_]+$ ]]; then
-    echo -e "${GREEN}✔ Accepted username: $USERNAME${NC}"
-    add_to_summary_table "Admin Username" "$USERNAME"
-    break
-  else
-    echo -e "${RED}❌ Invalid username. Only letters, numbers, and underscores are allowed (no @ signs).${NC}"
-  fi
-done
+#  if [[ "$USERNAME" =~ ^[a-zA-Z0-9_]+$ ]]; then
+#    echo -e "${GREEN}✔ Accepted username: $USERNAME${NC}"
+#    add_to_summary_table "Admin Username" "$USERNAME"
+#    break
+#  else
+#    echo -e "${RED}❌ Invalid username. Only letters, numbers, and underscores are allowed (no @ signs).${NC}"
+#  fi
+#done
 
 # Prompt for password with validation and confirmation
-while true; do
-    read -s -p "$(echo -e "${GREEN}Enter a password for the superuser: ${NC}")" PASSWORD
-    echo ""
-    if validate_password "$PASSWORD"; then
-        read -s -p "$(echo -e "${GREEN}Confirm the password: ${NC}")" PASSWORD_CONFIRM
-        echo ""
-        if [[ "$PASSWORD" == "$PASSWORD_CONFIRM" ]]; then
-            break
-        else
-            echo -e "${RED}Passwords do not match. Please try again.${NC}"
-        fi
-    else
-        echo -e "${RED}Please enter a valid password.${NC}"
-    fi
-done
+#while true; do
+#    read -s -p "$(echo -e "${GREEN}Enter a password for the superuser: ${NC}")" PASSWORD
+#    echo ""
+#    if validate_password "$PASSWORD"; then
+#        read -s -p "$(echo -e "${GREEN}Confirm the password: ${NC}")" PASSWORD_CONFIRM
+#        echo ""
+#        if [[ "$PASSWORD" == "$PASSWORD_CONFIRM" ]]; then
+#            break
+#        else
+#            echo -e "${RED}Passwords do not match. Please try again.${NC}"
+#        fi
+#    else
+#        echo -e "${RED}Please enter a valid password.${NC}"
+#    fi
+#done
+
+prompt_es_superuser
+prompt_kibana_superuser
 
 # Final confirmation message
 echo -e "\n${GREEN}Created Superuser variables for use later on during install.${NC}"

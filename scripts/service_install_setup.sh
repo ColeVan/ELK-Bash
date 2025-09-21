@@ -215,14 +215,33 @@ echo -e "${GREEN}Checking Elasticsearch status...${NC}"
 check_service elasticsearch
 
 # Create the superuser
-echo -e "${CYAN}🔑 Creating Elasticsearch superuser...${NC}"
-if sudo /usr/share/elasticsearch/bin/elasticsearch-users useradd "$USERNAME" -p "$PASSWORD" -r superuser > /dev/null 2>&1; then
-  echo -e "${BOLD}${GREEN}✅ Superuser '${USERNAME}' created successfully.${NC}"
-else
-  echo -e "${BOLD}${RED}❌ Failed to create superuser '${USERNAME}'.${NC}"
-  echo -e "${YELLOW}⚠️  Check Elasticsearch logs for more details.${NC}"
+#echo -e "${CYAN}🔑 Creating Elasticsearch superuser...${NC}"
+#if sudo /usr/share/elasticsearch/bin/elasticsearch-users useradd "$USERNAME" -p "$PASSWORD" -r superuser > /dev/null 2>&1; then
+#  echo -e "${BOLD}${GREEN}✅ Superuser '${USERNAME}' created successfully.${NC}"
+#else
+#  echo -e "${BOLD}${RED}❌ Failed to create superuser '${USERNAME}'.${NC}"
+#  echo -e "${YELLOW}⚠️  Check Elasticsearch logs for more details.${NC}"
+#  exit 1
+#fi
+
+require_es_users_bin
+
+#Create ES superuser (file realm)
+echo -e "${CYAN}🔑 Creating Elasticsearch superuser '${USERNAME}'...${NC}"
+if ! create_or_update_superuser "${USERNAME}" "${PASSWORD}"; then
   exit 1
 fi
+
+#Create Kibana WebUI superuser (also in file realm)
+#(Kibana authenticates against Elasticsearch’s realms)
+echo -e "${CYAN}🔑 Creating Kibana WebUI superuser '${KIBANA_USERNAME}'...${NC}"
+if ! create_or_update_superuser "${KIBANA_USERNAME}" "${KIBANA_PASSWORD}"; then
+  exit 1
+fi
+
+echo -e "\n${GREEN}✔ Superuser variables captured and users ensured in the file realm.${NC}"
+echo -e "${GREEN}   • ES API/Tokens user: ${CYAN}${USERNAME}${NC}"
+echo -e "${GREEN}   • Kibana WebUI user : ${CYAN}${KIBANA_USERNAME}${NC}"
 
 # Reset Kibana password and store it in a variable
 echo -e "${GREEN}Resetting Kibana password and saving to variable.${NC}"

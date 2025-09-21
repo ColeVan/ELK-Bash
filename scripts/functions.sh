@@ -94,6 +94,98 @@ validate_password() {
     return 0
 }
 
+# Path to elasticsearch-users (override if needed)
+ES_USERS_BIN="${ES_USERS_BIN:-/usr/share/elasticsearch/bin/elasticsearch-users}"
+
+require_es_users_bin() {
+  if ! command -v "${ES_USERS_BIN}" >/dev/null 2>&1; then
+    echo -e "${RED}❌ Cannot find 'elasticsearch-users' at: ${ES_USERS_BIN}${NC}"
+    echo -e "${YELLOW}Set ES_USERS_BIN to the correct path before continuing.${NC}"
+    exit 1
+  fi
+}
+
+# Create or update a file-realm superuser
+# Args: $1=username  $2=password
+create_or_update_superuser() {
+  local _u="$1" _p="$2"
+
+  # Try create first
+  if sudo "${ES_USERS_BIN}" useradd "${_u}" -p "${_p}" -r superuser >/dev/null 2>&1; then
+    echo -e "${BOLD}${GREEN}✅ Superuser '${_u}' created successfully.${NC}"
+    return 0
+  fi
+
+  # If creation failed, try to set / reset password for existing user
+  if sudo "${ES_USERS_BIN}" passwd "${_u}" -p "${_p}" >/dev/null 2>&1; then
+    echo -e "${BOLD}${YELLOW}ℹ️  User '${_u}' already existed — password updated.${NC}"
+    return 0
+  fi
+
+  echo -e "${BOLD}${RED}❌ Failed to create/update superuser '${_u}'.${NC}"
+  echo -e "${YELLOW}⚠️  Check Elasticsearch logs and file realm configuration.${NC}"
+  return 1
+}
+
+# ---------- Prompts ----------
+prompt_es_superuser() {
+  # Username: letters, numbers, underscore only
+  while true; do
+    prompt_input "Enter the superuser username for Elasticsearch interactions: " USERNAME
+    if [[ "$USERNAME" =~ ^[A-Za-z0-9_]+$ ]]; then
+      echo -e "${GREEN}✔ Accepted username: $USERNAME${NC}"
+      add_to_summary_table "ES Admin Username" "$USERNAME"
+      break
+    else
+      echo -e "${RED}❌ Invalid username. Use only letters, numbers, and underscore (no @).${NC}"
+    fi
+  done
+
+  # Password: use your existing validate_password policy
+  while true; do
+    read -rs -p "$(echo -e "${GREEN}Enter a password for ${USERNAME}: ${NC}")" PASSWORD; echo ""
+    if validate_password "$PASSWORD"; then
+      read -rs -p "$(echo -e "${GREEN}Confirm the password: ${NC}")" PASSWORD_CONFIRM; echo ""
+      if [[ "$PASSWORD" == "$PASSWORD_CONFIRM" ]]; then
+        break
+      else
+        echo -e "${RED}Passwords do not match. Please try again.${NC}"
+      fi
+    else
+      echo -e "${RED}Please enter a valid password.${NC}"
+    fi
+  done
+}
+
+prompt_kibana_superuser() {
+  # Username: allow @ . + - _ for WebUI convenience
+  while true; do
+    prompt_input "Enter the superuser username for Kibana webUI access: " KIBANA_USERNAME
+    if [[ "$KIBANA_USERNAME" =~ ^[A-Za-z0-9_@.+-]+$ ]]; then
+      echo -e "${GREEN}✔ Accepted username: $KIBANA_USERNAME${NC}"
+      add_to_summary_table "Kibana Admin Username" "$KIBANA_USERNAME"
+      break
+    else
+      echo -e "${RED}❌ Invalid username. Allowed: letters, numbers, _ @ . + -${NC}"
+    fi
+  done
+
+  # Password: same validation policy as ES (or adjust as needed)
+  while true; do
+    read -rs -p "$(echo -e "${GREEN}Enter a password for ${KIBANA_USERNAME}: ${NC}")" KIBANA_PASSWORD; echo ""
+    if validate_password "$KIBANA_PASSWORD"; then
+      read -rs -p "$(echo -e "${GREEN}Confirm the password: ${NC}")" KIBANA_PASSWORD_CONFIRM; echo ""
+      if [[ "$KIBANA_PASSWORD" == "$KIBANA_PASSWORD_CONFIRM" ]]; then
+        break
+      else
+        echo -e "${RED}Passwords do not match. Please try again.${NC}"
+      fi
+    else
+      echo -e "${RED}Please enter a valid password.${NC}"
+    fi
+  done
+}
+
 # Validate Elastic Stack version format
 validate_version() {
     if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -944,6 +1036,7 @@ run_nsm_enroll_remote() {
   source "$SCRIPT_DIR/remote_agent_install_nsm.sh"
   type log_step &>/dev/null && log_step "NSM_AGENT_DEPLOYED" "true" || true
   trap - SIGINT
+  trap - SIGINT
   pause_and_return_to_menu
 }
 
@@ -997,8 +1090,6 @@ svc_active() { systemctl is-active --quiet "$1"; }
 pause_and_return_to_menu() { echo -e "\n${YELLOW}Press Enter to return to the main menu...${NC}"; read -r; }
 
 # Cyber-themed, all-green matrix rain (Bash)
-# Inspired by https://github.com/wick3dr0se
-# Credit to https://github.com/wick3dr0se
 # Presets (-p): hex | bin | leet | ioc | dns | ascii
 # Examples:
 #   matrix_rain                  # default (green ASCII rain)
@@ -1223,41 +1314,6 @@ deploy_es_agents() {
 
   echo -e "${GREEN}✔ Remote agent enrollment completed.${NC}"
   [[ -f "$enroll_log" ]] && echo -e "${DIM}Log saved to:${NC} ${enroll_log}"
-}
-
-# --- NSM: enroll remote sensor nodes via Elastic Agent ---
-run_nsm_enroll_remote() {
-  clear
-  echo -e "${CYAN}----------------------------------------------------------------${NC}"
-  echo -e " ${BOLD}${GREEN}Enroll Remote NSM Sensor Nodes${NC}"
-  echo -e "${CYAN}----------------------------------------------------------------${NC}"
-
-  local script="$SCRIPT_DIR/remote_agent_install_nsm.sh"
-  if [[ ! -f "$script" ]]; then
-    echo -e "${RED}Missing ${YELLOW}$script${RED}. Put remote_agent_install_nsm.sh next to orchestrate.sh.${NC}"
-    pause_and_return_to_menu; return 1
-  fi
-
-  load_env 2>/dev/null || true
-  local fleet_host="${NSM_FLEET_SERVER_HOST:-${FLEET_SERVER_HOST:-${ELASTIC_HOST:-}}}"
-  local token="${NSM_ENROLLMENT_TOKEN:-${ENROLLMENT_TOKEN:-}}"
-
-  local hosts
-  read -r -p "$(echo -e "${GREEN}Enter comma-separated NSM sensor hosts (IPs or DNS)${NC}: ")" hosts
-
-  if bash "$script" \
-      ${fleet_host:+-e "$fleet_host"} \
-      ${token:+-t "$token"} \
-      ${hosts:+-h "$hosts"}; then
-    [[ -f "$ELK_ENV_FILE" ]] && source "$ELK_ENV_FILE"
-    if [[ -n "${NSM_ENROLLED_HOSTS:-}" ]]; then
-      echo -e "${GREEN}✔ NSM hosts enrolled:${NC} ${NSM_ENROLLED_HOSTS}"
-    fi
-    pause_and_return_to_menu; return 0
-  else
-    echo -e "${RED}❌ One or more enrollments failed.${NC}"
-    pause_and_return_to_menu; return 1
-  fi
 }
 
 
